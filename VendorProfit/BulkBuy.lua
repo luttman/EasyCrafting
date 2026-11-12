@@ -44,6 +44,8 @@ end
 
 local function SetAmount(value)
     dialog.amount:SetText(tostring(Amount(value)))
+    -- Select the number so that typing replaces it.
+    dialog.amount:HighlightText()
 end
 
 local function Buy()

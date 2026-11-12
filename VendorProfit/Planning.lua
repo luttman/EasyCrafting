@@ -110,20 +110,49 @@ function addon.AddToShopping(id, quantity, schematic)
     if not shopping[id] then
         local inputs = addon.DirectReagents(schematic, 1)
         if not next(inputs) then return end
-        shopping[id] = { quantity = 0, reagents = inputs }
+        local last = 0
+        for _, job in pairs(shopping) do last = math.max(last, job.order or 0) end
+        shopping[id] = { quantity = 0, reagents = inputs, order = last + 1 }
     end
     shopping[id].quantity = math.min(999, shopping[id].quantity + quantity)
 end
 
+-- Saved crafts in queue order. Crafts saved before the order existed sort first, by recipe.
+local function JobIDs(shopping)
+    local ids = {}
+    for id in pairs(shopping) do ids[#ids + 1] = id end
+    table.sort(ids, function(a, b)
+        local first, second = shopping[a].order or 0, shopping[b].order or 0
+        if first ~= second then return first < second end
+        return a < b
+    end)
+    return ids
+end
+
+-- Moves a saved craft one place up (-1) or down (1) in the queue.
+function addon.MoveJob(id, direction)
+    local shopping = addon.GetWork().shopping
+    local ids = JobIDs(shopping)
+    for index, job in ipairs(ids) do
+        local other = ids[index + direction]
+        if job == id and other then
+            ids[index], ids[index + direction] = other, job
+            break
+        end
+    end
+    for index, job in ipairs(ids) do shopping[job].order = index end
+end
+
 function addon.ShoppingPlan(bagCount)
     local demand, jobs = {}, {}
-    for id, job in pairs(addon.GetWork().shopping) do
+    local shopping = addon.GetWork().shopping
+    for _, id in ipairs(JobIDs(shopping)) do
+        local job = shopping[id]
         jobs[#jobs + 1] = { id = id, quantity = job.quantity }
         for item, perCraft in pairs(job.reagents) do
             demand[item] = (demand[item] or 0) + perCraft * job.quantity
         end
     end
-    table.sort(jobs, function(a, b) return a.id < b.id end)
     local needs, prerequisites = addon.PlanShopping(demand, bagCount)
     return needs, prerequisites, jobs
 end

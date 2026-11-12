@@ -9,7 +9,7 @@ local Refresh, DrawRows, DrawDetail
 local savedAlpha, dockedTab, openingUntil
 local nativeMouse = {}
 local craftingJob, rankInfo
-local linked
+local linked, dismissed
 local GetSetting = addon.GetSetting
 local Money, ItemName, SpellName = addon.Money, addon.ItemName, addon.SpellName
 
@@ -600,10 +600,21 @@ local function AddMaterials(lines, header, amounts)
     end
 end
 
-local function AddJobs(lines, jobs)
-    for _, job in ipairs(jobs) do
+-- With `movable`, the lines also get buttons that change the craft's place in the queue.
+-- How far the batch is, from 0 to 1, counting the part of the current cast that is done.
+local function BatchProgress()
+    local job, current = craftingJob, 0
+    if job.duration and job.ends and job.duration > 0 then
+        current = math.max(0, math.min(1, 1 - (job.ends - GetTime()) / job.duration))
+    end
+    return math.min(1, (job.done + current) / job.count)
+end
+
+local function AddJobs(lines, jobs, movable)
+    for index, job in ipairs(jobs) do
         lines[#lines + 1] = { job = job.id, spellID = job.id, icon = C_Spell.GetSpellTexture(job.id),
-            text = ("%d × %s"):format(job.quantity, SpellName(job.id)) }
+            text = ("%d × %s"):format(job.quantity, SpellName(job.id)),
+            movable = movable, first = index == 1, last = index == #jobs }
     end
 end
 
@@ -659,7 +670,7 @@ local function QueueLines()
     window.needs, window.prerequisites, window.jobs = needs, prerequisites, jobs
     if #jobs == 0 then return "Add a recipe to the shopping list to queue it.", lines end
     AddCrafts(lines, prerequisites, "Reagent")
-    AddJobs(lines, jobs)
+    AddJobs(lines, jobs, true)
     local notes = {}
     if next(needs) then notes[#notes + 1] = "Open the shopping list to see missing materials." end
     if craftingJob then
@@ -704,6 +715,20 @@ local function LineRow(panel, index)
     row.more:SetPoint("RIGHT", -3, 0)
     row.less = Button(row, "-", 22, function() ChangeJob(row.entry.job, -1) end)
     row.less:SetPoint("RIGHT", row.more, "LEFT", -2, 0)
+    local function MoveButton(direction, texture, anchor, gap)
+        local button = Button(row, "", 22, function()
+            addon.MoveJob(row.entry.job, direction)
+            DrawDetail()
+        end)
+        button:SetPoint("RIGHT", anchor, "LEFT", gap, 0)
+        local arrow = button:CreateTexture(nil, "OVERLAY")
+        arrow:SetSize(14, 14)
+        arrow:SetPoint("CENTER")
+        arrow:SetTexture(texture)
+        return button
+    end
+    row.down = MoveButton(1, "Interface\\Buttons\\Arrow-Down-Up", row.less, -8)
+    row.up = MoveButton(-1, "Interface\\Buttons\\Arrow-Up-Up", row.down, -2)
     return row
 end
 
@@ -723,6 +748,10 @@ local function DrawLines(lines)
         row.right:SetText(entry.right or "")
         row.more:SetShown(entry.job ~= nil)
         row.less:SetShown(entry.job ~= nil)
+        row.up:SetShown(entry.movable == true)
+        row.down:SetShown(entry.movable == true)
+        row.up:SetEnabled(not entry.first)
+        row.down:SetEnabled(not entry.last)
         row:Show()
     end
     for index = #lines + 1, #panel.rows do panel.rows[index]:Hide() end
@@ -880,6 +909,7 @@ DrawDetail = function()
     window.recipeName:SetText(shopping and "Shopping list"
         or queue and "Crafting queue" or tools and "Profession tools" or info.name)
     window.recipeIcon:SetTexture(not special and info.icon or 134400)
+    window.iconHover.entry = { info = not special and info or nil }
     window.favorite:SetShown(learned and not special)
     window.favorite.star:SetAtlas(info and info.favorite and "auctionhouse-icon-favorite" or "auctionhouse-icon-favorite-off")
     window.track:SetShown(learned and not special)
@@ -999,26 +1029,52 @@ local function BuyMaterials()
         print("Vendor Profit: this merchant has none of the materials on your list.")
         return
     end
-    local total = 0
-    for _, offer in ipairs(offers) do total = total + offer.total end
-    StaticPopupDialogs.VENDORPROFIT_BUY = StaticPopupDialogs.VENDORPROFIT_BUY or {
-        text = "Buy these materials for %s?",
-        button1 = BUY, button2 = CANCEL, timeout = 0, whileDead = false, hideOnEscape = true,
-        OnAccept = function(_, approved)
+    -- The dialog lists every purchase and the total, so the player sees what Buy does.
+    local dialog = window.buyDialog
+    if not dialog then
+        dialog = Window("VendorProfitBuyConfirm", 340, 120, "Buy from this merchant")
+        window.buyDialog = dialog
+        dialog.list = Label(dialog, "GameFontHighlight", colors.text)
+        dialog.list:SetPoint("TOPLEFT", 14, -44)
+        dialog.list:SetPoint("RIGHT", -14, 0)
+        dialog.list:SetJustifyH("LEFT")
+        dialog.list:SetSpacing(4)
+        local buy = Button(dialog, "Buy materials", 110, function()
+            local approved = dialog.approved
+            dialog:Hide()
             if not (MerchantFrame and MerchantFrame:IsShown()) then return end
+            -- Buy only if the merchant still offers exactly what the dialog listed.
             local current = addon.MerchantOffers(approved.needs)
-            if #current ~= #approved.offers then return end
+            local same = #current == #approved.offers
             for index, offer in ipairs(current) do
                 local expected = approved.offers[index]
-                if offer.id ~= expected.id or offer.index ~= expected.index or offer.total ~= expected.total
-                    or offer.quantity ~= expected.quantity then return end
+                same = same and expected ~= nil and offer.id == expected.id and offer.index == expected.index
+                    and offer.total == expected.total and offer.quantity == expected.quantity
             end
-            if GetMoney() < approved.total then return end
-            for _, offer in ipairs(current) do BuyMerchantItem(offer.index, offer.quantity) end
-            QueueRefresh()
-        end,
-    }
-    StaticPopup_Show("VENDORPROFIT_BUY", Money(total), nil, { needs = window.needs, offers = offers, total = total })
+            if not same then
+                print("Vendor Profit: the merchant's offers changed. Review the purchases again.")
+            elseif GetMoney() < approved.total then
+                print("Vendor Profit: you don't have enough money for these materials.")
+            else
+                for _, offer in ipairs(current) do BuyMerchantItem(offer.index, offer.quantity) end
+                QueueRefresh()
+            end
+        end)
+        buy:SetPoint("BOTTOMRIGHT", -14, 12)
+        local cancel = Button(dialog, "Cancel", 90, function() dialog:Hide() end)
+        cancel:SetPoint("RIGHT", buy, "LEFT", -6, 0)
+    end
+    local total, lines = 0, {}
+    for _, offer in ipairs(offers) do
+        total = total + offer.total
+        lines[#lines + 1] = ("%d x %s  |cff9eaab5%s|r"):format(offer.quantity, ItemName(offer.id), Money(offer.total))
+    end
+    lines[#lines + 1] = "\nTotal  " .. Money(total)
+    dialog.list:SetText(table.concat(lines, "\n"))
+    dialog.approved = { needs = window.needs, offers = offers, total = total }
+    dialog:SetHeight(112 + #offers * 18)
+    dialog:Show()
+    dialog:Raise()
 end
 
 local function CraftNext()
@@ -1157,6 +1213,19 @@ local function BuildDetail()
     window.recipeIcon = detail:CreateTexture(nil, "ARTWORK")
     window.recipeIcon:SetSize(42, 42)
     window.recipeIcon:SetPoint("TOPLEFT", 12, -12)
+    -- Hover the icon for the crafted item's tooltip; shift-click it to link the item in chat.
+    local iconHover = CreateFrame("Button", nil, detail)
+    window.iconHover = iconHover
+    iconHover:SetAllPoints(window.recipeIcon)
+    iconHover:RegisterForClicks("LeftButtonUp")
+    iconHover:SetScript("OnEnter", HoverRow)
+    iconHover:SetScript("OnLeave", addon.HideRoute)
+    iconHover:SetScript("OnHide", addon.HideRoute)
+    iconHover:SetScript("OnClick", function(self)
+        local info = self.entry.info
+        local link = info and C_TradeSkillUI.GetRecipeItemLink and C_TradeSkillUI.GetRecipeItemLink(info.recipeID)
+        if link then HandleModifiedItemClick(link) end
+    end)
     window.recipeName = Label(detail, "GameFontNormalLarge", colors.text)
     window.recipeName:SetPoint("TOPLEFT", window.recipeIcon, "TOPRIGHT", 8, -1)
     window.recipeName:SetPoint("RIGHT", -144, 0)
@@ -1318,9 +1387,15 @@ local function BuildDetail()
     window.lessQuantity, window.moreQuantity = less, more
 end
 
--- HideUIPanel is blocked for addons in combat, so hide the frame directly there.
+-- An addon can't hide the profession frame in combat. Hide only this window there, leave the
+-- native frame open but invisible, and close it when combat ends.
 local function CloseProfession()
-    if InCombatLockdown() then native:Hide() else HideUIPanel(native) end
+    if InCombatLockdown() then
+        dismissed = true
+        window:Hide()
+    else
+        HideUIPanel(native)
+    end
 end
 
 local function BuildWindow()
@@ -1400,15 +1475,20 @@ local function BuildWindow()
     window.skill:SetStatusBarColor(unpack(colors.bar))
     window.skill.label = Label(window.skill, "GameFontHighlightSmall", colors.text)
     window.skill.label:SetPoint("CENTER")
-    window.batchBand = CreateFrame("Frame", nil, window)
+    -- The band is a progress bar: its fill grows behind the text as the batch runs.
+    window.batchBand = CreateFrame("StatusBar", nil, window)
+    window.batchBand:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
+    window.batchBand:SetStatusBarColor(colors.bar[1], colors.bar[2], colors.bar[3], 0.45)
+    window.batchBand:SetMinMaxValues(0, 1)
     window.batchBand:SetPoint("TOPLEFT", 8, -62 - top)
     window.batchBand:SetPoint("TOPRIGHT", -8, -62 - top)
     window.batchBand:SetHeight(34)
     Surface(window.batchBand, "BACKGROUND", colors.banner)
-    window.batch = Label(window.batchBand, "GameFontHighlight", colors.accent)
+    window.batch = Label(window.batchBand, "GameFontHighlight", colors.text)
     window.batch:SetPoint("LEFT", 8, 0)
     window:SetScript("OnUpdate", function(self, elapsed)
         if not craftingJob then return end
+        self.batchBand:SetValue(BatchProgress())
         self.batchElapsed = (self.batchElapsed or 0) + elapsed
         if self.batchElapsed >= 0.25 then
             self.batchElapsed = 0
@@ -1431,6 +1511,7 @@ local function OnNativeShow()
         page = crafting
         native = ProfessionsFrame
         local function OnNativeHide()
+            dismissed = nil
             if window then window:Hide() end
             RestoreNative()
         end
@@ -1450,7 +1531,7 @@ local function OnNativeShow()
 end
 
 Refresh = function()
-    if not page then return end
+    if not page or dismissed then return end
     local isLinked = IsLinkedProfession()
     if linked ~= isLinked and window then
         window.preview = nil
@@ -1494,6 +1575,7 @@ Refresh = function()
     local batchText = BatchText()
     window.batchBand:SetShown(batchText ~= nil)
     window.batch:SetText(batchText or "")
+    if craftingJob then window.batchBand:SetValue(BatchProgress()) end
     local bodyY = (batchText and -105 or -67) - window.top
     window.search:SetPoint("TOPLEFT", 8, bodyY)
     window.detail:SetPoint("TOPLEFT", listWidth + 16, bodyY)
@@ -1566,6 +1648,9 @@ events:SetScript("OnEvent", function(self, event, arg1, _, spellID)
         end)
     elseif event == "TRADE_SKILL_SHOW" then
         OnNativeShow()
+    elseif event == "PLAYER_REGEN_ENABLED" and dismissed then
+        dismissed = nil
+        HideUIPanel(native)
     elseif event == "TRADE_SKILL_CLOSE" or event == "PLAYER_REGEN_ENABLED"
         or (page and page:IsVisible()) then
         QueueRefresh()

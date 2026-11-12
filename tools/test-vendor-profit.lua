@@ -343,6 +343,7 @@ for _, method in ipairs({
     widgetMethods[method] = function() end
 end
 widgetMethods.GetFrameLevel = function() return 100 end
+widgetMethods.HighlightText = function(self) self.highlighted = self.text end
 local function FindText(text)
     for _, widget in ipairs(widgets) do
         if widget.text and widget.text:find(text, 1, true) then return widget end
@@ -548,10 +549,28 @@ FindButton("Create all (3)"):Click()
 assert(crafted == 3)
 queued()
 local batch = FindText("Crafting  0 / 3")
-assert(batch and batch.parent:IsShown())
-for _ = 1, 3 do windowEvents:OnEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "cast", 3953) end
+assert(batch and batch.parent:IsShown() and batch.parent.value == 0)
+windowEvents:OnEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "cast", 3953)
+queued()
+assert(math.abs(batch.parent.value - 1 / 3) < 0.001)
+overlay:OnUpdate(0)
+for _ = 1, 2 do windowEvents:OnEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "cast", 3953) end
 queued()
 assert(not batch.parent:IsShown())
+local shown, linkedItem
+GameTooltip.SetRecipeResultItem = function(_, id) shown = id end
+GameTooltip.NumLines = function() return 1 end
+C_TradeSkillUI.GetRecipeItemLink = function(id) return "item-link-" .. id end
+HandleModifiedItemClick = function(link) linkedItem = link end
+local iconHover
+for _, widget in ipairs(widgets) do
+    -- Recipe list rows also carry a recipe entry; they have a count label and the icon button doesn't.
+    if widget.kind == "Button" and widget.entry and widget.entry.info and not widget.count then iconHover = widget end
+end
+iconHover:OnEnter()
+iconHover:Click()
+assert(shown == 3953 and linkedItem == "item-link-3953")
+iconHover:OnLeave()
 FindText("Profit to vendor").parent:OnEnter()
 assert(GameTooltip.lines[2] == "Smelt Bronze x 1 (makes 2 x Bronze Bar) | 273c")
 FindText("Profit to vendor").parent:OnLeave()
@@ -574,6 +593,20 @@ savedJob.more:Click()
 assert(addon.GetWork().shopping[3953].quantity == 4 and FindText("4 × Bronze Framework"))
 savedJob.less:Click()
 assert(addon.GetWork().shopping[3953].quantity == 3)
+-- The queue keeps the order crafts were saved in, and its arrows swap neighbors.
+addon.AddToShopping(15863, 1, schematics[15863])
+FindButton("Queue"):Click()
+local queuedJob = FindText("3 × Bronze Framework").parent
+assert(queuedJob.down:IsShown() and queuedJob.down:IsEnabled() and not queuedJob.up:IsEnabled())
+queuedJob.down:Click()
+local _, _, reordered = addon.ShoppingPlan(Count)
+assert(reordered[1].id == 15863 and reordered[2].id == 3953)
+addon.MoveJob(3953, -1)
+_, _, reordered = addon.ShoppingPlan(Count)
+assert(reordered[1].id == 3953)
+addon.GetWork().shopping[15863] = nil
+FindButton("Shopping list"):Click()
+assert(not savedJob.up:IsShown())
 assert(not FindText("Leveling plan") and not FindText("Include recipes you can train later"))
 assert(not FindText("Next rank available") and not FindText("Next profession rank guidance"))
 assert(not FindButton("Waypoint") and not FindButton("Skill-up plan"))
@@ -587,6 +620,23 @@ C_MerchantFrame = { GetItemInfo = function()
 end }
 local offer = addon.MerchantOffers({ [2692] = 6 })[1]
 assert(offer.quantity == 10 and offer.total == 100)
+-- Review purchases lists what the merchant sells from the list, then buys it on confirmation.
+local purchases = {}
+BuyMerchantItem = function(index, quantity) purchases[#purchases + 1] = index .. ":" .. quantity end
+GetMoney = function() return 1000 end
+addon.AddToShopping(15863, 3, schematics[15863])
+AuctionHouseFrame:Hide()
+addon.RefreshWindow()
+queued()
+FindButton("Review purchases"):Click()
+local confirm = FindText("Buy from this merchant").parent
+assert(confirm:IsShown() and FindText("5 x Item #2692") and FindText("Total  50c"))
+FindButton("Buy materials"):Click()
+assert(not confirm:IsShown() and #purchases == 1 and purchases[1] == "1:5")
+addon.GetWork().shopping[15863] = nil
+AuctionHouseFrame:Show()
+addon.RefreshWindow()
+queued()
 SlashCmdList.VENDORPROFITWINDOW()
 queued()
 assert(not overlay:IsShown() and ProfessionsFrame:GetAlpha() == 1)
@@ -604,19 +654,21 @@ HideUIPanel = function(frame)
     crafting:Hide()
     frame:OnHide()
 end
+-- In combat the game blocks both ways of hiding the profession frame, so only the overlay closes.
+local closePanel = HideUIPanel
+local function Blocked() error("hiding the profession frame is blocked in combat") end
 inCombat = true
-HideUIPanel = function() error("HideUIPanel is blocked in combat") end
-ProfessionsFrame.Hide = function(frame)
-    frame.shown = false
-    crafting:Hide()
-    frame:OnHide()
-end
+HideUIPanel, ProfessionsFrame.Hide = Blocked, Blocked
 FindButton("X"):Click()
-assert(not overlay:IsShown() and ProfessionsFrame:GetAlpha() == 1)
+assert(not overlay:IsShown() and ProfessionsFrame:IsShown() and ProfessionsFrame:GetAlpha() == 0)
 assert(not ProfessionsFrame:IsMouseClickEnabled())
-inCombat = false
-windowEvents:OnEvent("PLAYER_REGEN_ENABLED")
+addon.RefreshWindow()
 queued()
+assert(not overlay:IsShown() and ProfessionsFrame:GetAlpha() == 0)
+inCombat = false
+HideUIPanel, ProfessionsFrame.Hide = closePanel, nil
+windowEvents:OnEvent("PLAYER_REGEN_ENABLED")
+assert(not ProfessionsFrame:IsShown() and ProfessionsFrame:GetAlpha() == 1)
 assert(ProfessionsFrame:IsMouseClickEnabled() and crafting:IsMouseWheelEnabled())
 loadingProfession = true
 ProfessionsFrame:SetAlpha(0.8)
@@ -651,6 +703,11 @@ bulkEvents:OnEvent("PLAYER_LOGIN")
 MerchantItemButton_OnModifiedClick({ GetID = function() return 1 end }, "LeftButton")
 local bulk = FindText("Buy in bulk").parent
 assert(bulk:IsShown() and FindText("Cost  50c") and FindText("Coal"))
+local amountBox
+for _, widget in ipairs(widgets) do
+    if widget.kind == "EditBox" and widget.parent == bulk then amountBox = widget end
+end
+assert(amountBox.highlighted == "5")
 FindButton("Max"):Click()
 assert(FindText("Cost  400c"))
 FindButton("Buy"):Click()
