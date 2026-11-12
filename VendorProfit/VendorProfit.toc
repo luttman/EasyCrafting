@@ -1,0 +1,15 @@
+## Interface: 16001
+## Title: Vendor Profit
+## Notes: Profession window, vendor profit, and material shopping lists.
+## Version: 1.4.7
+## Dependencies: Auctionator
+## OptionalDeps: QuestieDB
+## SavedVariablesPerCharacter: VendorProfitRecipes, VendorProfitWork
+## SavedVariables: VendorProfitSettings
+
+VendorProfit.lua
+Settings.lua
+ProfessionData.lua
+Planning.lua
+ProfessionTools.lua
+ProfessionWindow.lua
