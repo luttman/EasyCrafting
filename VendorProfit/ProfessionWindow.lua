@@ -10,9 +10,8 @@ local savedAlpha, dockedTab, openingUntil
 local nativeMouse = {}
 local craftingJob, rankInfo
 local linked
-local GetSetting = function(key)
-    return not addon.GetSetting or addon.GetSetting(key)
-end
+local GetSetting = addon.GetSetting
+local Money, ItemName, SpellName = addon.Money, addon.ItemName, addon.SpellName
 
 local colors = {
     background = { 0.075, 0.085, 0.095 },
@@ -30,15 +29,49 @@ local colors = {
     gain = { 0.40, 0.88, 0.60 },
     loss = { 1, 0.47, 0.47 },
 }
-local difficulty = { [0] = "Orange", [1] = "Yellow", [2] = "Green", [3] = "Gray" }
 local difficultyColors = {
     [0] = { 1, 0.62, 0.30 },
     [1] = { 1, 0.88, 0.30 },
     [2] = { 0.51, 0.87, 0.39 },
     [3] = { 0.65, 0.69, 0.72 },
 }
-local fontSizes = { GameFontNormalLarge = 16, GameFontHighlight = 13 }
-local rowHeight, listWidth = 20, 376
+local fontSizes = { GameFontNormalLarge = 16, GameFontHighlight = 13, GameFontNormal = 13 }
+local blizzard, fontFile, fontFlags
+
+-- Three looks share one layout: Blizzard templates, EllesmereUI's theme, or the built-in flat theme.
+-- ponytail: the skin is read once when the window is built, so a change needs /reload.
+local function ApplySkin()
+    if fontFlags then return end
+    blizzard = GetSetting("blizzardStyle")
+    local overrides
+    if blizzard then
+        fontFile, fontFlags = nil, ""
+        overrides = {
+            background = { 0, 0, 0, 0.3 }, panel = { 0, 0, 0, 0.3 }, group = { 1, 1, 1, 0.07 },
+            selected = { 1, 0.82, 0, 0.22 }, banner = { 1, 0.82, 0, 0.12 }, accent = { 1, 0.82, 0 },
+            bar = { 0.25, 0.5, 0.85 }, text = { 1, 1, 1 }, muted = { 0.62, 0.62, 0.62 }, gold = { 1, 0.82, 0 },
+        }
+    elseif EllesmereUI then
+        local accent = EllesmereUI.ACCENT_COLOR or EllesmereUI.ELLESMERE_GREEN or { r = 12 / 255, g = 210 / 255, b = 157 / 255 }
+        local r, g, b = accent.r, accent.g, accent.b
+        local ok, path = pcall(EllesmereUI.GetFontPath)
+        local flagged, flags = pcall(EllesmereUI.GetFontOutlineFlag)
+        fontFile = ok and type(path) == "string" and path ~= "" and path or ChatFontNormal:GetFont()
+        fontFlags = flagged and type(flags) == "string" and flags or ""
+        overrides = {
+            background = { 0.08, 0.08, 0.08, 0.92 }, panel = { 0.04, 0.04, 0.04, 0.85 },
+            button = { 0.11, 0.11, 0.11 }, border = { 0.20, 0.20, 0.20 }, group = { 0.14, 0.14, 0.14 },
+            selected = { r * 0.3, g * 0.3, b * 0.3 }, banner = { 0.14, 0.14, 0.14 },
+            accent = { r, g, b }, bar = { r, g, b }, text = { 1, 1, 1 }, muted = { 0.6, 0.6, 0.6 },
+        }
+    else
+        -- The chat font is Arial Narrow on Latin clients and a font with the right glyphs elsewhere.
+        fontFile, fontFlags = ChatFontNormal:GetFont(), ""
+    end
+    for key, color in pairs(overrides or {}) do colors[key] = color end
+end
+
+local rowHeight, listWidth, lineHeight = 20, 376, 24
 
 local function TextColor(region, color)
     region:SetTextColor(unpack(color))
@@ -57,25 +90,33 @@ end
 
 local function Label(parent, font, color)
     local text = parent:CreateFontString(nil, "OVERLAY", font)
-    text:SetFont("Fonts\\ARIALN.TTF", fontSizes[font] or 12, "")
+    if fontFile then text:SetFont(fontFile, fontSizes[font] or 12, fontFlags) end
     TextColor(text, color)
     return text
 end
 
 local function Button(parent, text, width, action)
+    if blizzard then
+        local template = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+        template:SetSize(width, 22)
+        template:SetText(text)
+        template.label = template:GetFontString()
+        template:SetScript("OnClick", action)
+        return template
+    end
     local button = CreateFrame("Button", nil, parent)
-    button:SetSize(width, 24)
+    button:SetSize(width, 22)
     button:EnableMouse(true)
     button:RegisterForClicks("LeftButtonUp")
     Surface(button, "BACKGROUND", colors.border)
-    local inner = button:CreateTexture(nil, "BORDER")
-    inner:SetPoint("TOPLEFT", 1, -1)
-    inner:SetPoint("BOTTOMRIGHT", -1, 1)
-    Fill(inner, colors.button)
+    button.inner = button:CreateTexture(nil, "BORDER")
+    button.inner:SetPoint("TOPLEFT", 1, -1)
+    button.inner:SetPoint("BOTTOMRIGHT", -1, 1)
+    Fill(button.inner, colors.button)
     local hover = button:CreateTexture(nil, "HIGHLIGHT")
-    hover:SetAllPoints(inner)
-    Fill(hover, colors.selected)
-    hover:SetAlpha(0.2)
+    hover:SetAllPoints(button.inner)
+    Fill(hover, colors.accent)
+    hover:SetAlpha(0.12)
     button.label = Label(button, "GameFontNormalSmall", colors.text)
     button.label:SetPoint("CENTER")
     button.label:SetText(text)
@@ -85,9 +126,41 @@ local function Button(parent, text, width, action)
     return button
 end
 
-local function Money(value)
-    return GetMoneyString(math.floor(math.abs(value)), true)
+-- A small themed dialog: the settings, the bulk-buy dialog, and notices all use it.
+local function Window(name, width, height, title)
+    ApplySkin()
+    local frame = CreateFrame("Frame", name, UIParent, blizzard and "BasicFrameTemplateWithInset" or nil)
+    frame:Hide()
+    frame:SetSize(width, height)
+    frame:SetPoint("CENTER")
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame:SetClampedToScreen(true)
+    frame:EnableMouse(true)
+    if blizzard then
+        local backdrop = frame:CreateTexture(nil, "BACKGROUND", nil, -8)
+        backdrop:SetPoint("TOPLEFT", 4, -4)
+        backdrop:SetPoint("BOTTOMRIGHT", -4, 4)
+        backdrop:SetColorTexture(0.055, 0.063, 0.073, 1)
+        frame.title = frame.TitleText
+    else
+        local edge = frame:CreateTexture(nil, "BACKGROUND", nil, -8)
+        edge:SetPoint("TOPLEFT", -1, 1)
+        edge:SetPoint("BOTTOMRIGHT", 1, -1)
+        edge:SetColorTexture(colors.border[1], colors.border[2], colors.border[3], 1)
+        local backdrop = frame:CreateTexture(nil, "BACKGROUND", nil, -7)
+        backdrop:SetAllPoints()
+        backdrop:SetColorTexture(colors.background[1], colors.background[2], colors.background[3], 1)
+        frame.title = Label(frame, "GameFontNormalLarge", colors.accent)
+        frame.title:SetPoint("TOPLEFT", 10, -11)
+        local close = Button(frame, "X", 25, function() frame:Hide() end)
+        close:SetPoint("TOPRIGHT", -8, -7)
+    end
+    frame.title:SetText(title)
+    if UISpecialFrames then UISpecialFrames[#UISpecialFrames + 1] = name end
+    return frame
 end
+
+addon.Skin = { colors = colors, Label = Label, Button = Button, Window = Window }
 
 local function ProfitText(value)
     local copper = math.floor(value)
@@ -100,15 +173,12 @@ local function BagCount(id)
     return C_Item.GetItemCount(id, false, false, true) or 0
 end
 
-local function ItemName(id)
-    return C_Item.GetItemNameByID(id) or ("Item #" .. id)
-end
-
 local function GetSchematic(info)
-    if info.offline then return addon.OfflineSchematic(info.recipeID) end
-    local ok, schematic = pcall(C_TradeSkillUI.GetRecipeSchematic, info.recipeID, false)
-    if ok and schematic and schematic.reagentSlotSchematics then return schematic end
-    if addon.OfflineSchematic then return addon.OfflineSchematic(info.recipeID) end
+    if not info.offline then
+        local ok, schematic = pcall(C_TradeSkillUI.GetRecipeSchematic, info.recipeID, false)
+        if ok and schematic and schematic.reagentSlotSchematics then return schematic end
+    end
+    return addon.OfflineSchematic(info.recipeID)
 end
 
 local function SelectedRecipe()
@@ -124,10 +194,13 @@ local function IsLinkedProfession()
     return C_TradeSkillUI.IsTradeSkillLinked and C_TradeSkillUI.IsTradeSkillLinked() == true or false
 end
 
+local function AuctionHouseOpen()
+    return AuctionHouseFrame ~= nil and AuctionHouseFrame:IsShown()
+end
+
 local function Active(isLinked, allowLoading)
     return not failed and page and page:IsVisible() and GetSetting("window")
-        and not (VendorProfitSettings and VendorProfitSettings.native)
-        and (addon.IsOwnProfession(allowLoading) or (isLinked and GetSetting("orders")))
+        and (addon.IsOwnProfession(allowLoading) or isLinked)
 end
 
 local function HideNative()
@@ -158,6 +231,7 @@ local function RestoreNative()
 end
 
 -- The native page stays open for crafting, even while its controls are transparent.
+-- This runs on every refresh because the native page creates controls after it opens.
 local function DisableNativeMouse(region)
     if dockedTab and dockedTab.alpha[region] ~= nil then return end
     if region.IsForbidden and region:IsForbidden() then return end
@@ -221,7 +295,7 @@ local function QueueRefresh()
 end
 
 local function BatchText()
-    if not craftingJob or not GetSetting("timer") then return end
+    if not craftingJob then return end
     local text = ("Crafting  %d / %d"):format(craftingJob.done, craftingJob.count)
     if craftingJob.duration and craftingJob.ends then
         local seconds = math.max(0, craftingJob.ends - GetTime())
@@ -231,6 +305,8 @@ local function BatchText()
     return text
 end
 
+-- ponytail: every refresh rebuilds the records, so the profit filter and the skill-up
+-- sort price every recipe again. Cache quotes per recipe if that shows up in a profile.
 local function ReadRecipes()
     records = {}
     local known = {}
@@ -248,7 +324,7 @@ local function ReadRecipes()
         end
     end
     if GetSetting("unlearned") then
-        for id, data in pairs(addon.RecipeData or {}) do
+        for id, data in pairs(addon.RecipeData) do
             if data.line == professionID and not known[id] then
                 local name = C_Spell.GetSpellName(id)
                 if name then
@@ -261,9 +337,7 @@ local function ReadRecipes()
     end
     table.sort(records, function(a, b)
         if a.info.learned ~= b.info.learned then return a.info.learned == true end
-        if GetSetting("favorites") and a.info.learned and a.info.favorite ~= b.info.favorite then
-            return a.info.favorite == true
-        end
+        if a.info.learned and a.info.favorite ~= b.info.favorite then return a.info.favorite == true end
         if a.order ~= b.order then return a.order < b.order end
         if a.category ~= b.category then return a.category < b.category end
         if (a.index ~= nil) ~= (b.index ~= nil) then return a.index ~= nil end
@@ -276,20 +350,19 @@ local function PriceRecord(record)
     if record.priced then return end
     record.priced = true
     local schematic = GetSchematic(record.info)
-    if record.info.learned and not linked and GetSetting("craftCounts") and addon.CraftCounts then
+    if record.info.learned and not linked and GetSetting("craftCounts") then
         record.bagCrafts, record.merchantCrafts = addon.CraftCounts(schematic, BagCount)
     end
-    local owned = addon.GetWork and GetSetting("owned") and addon.GetWork().owned or nil
-    local quote, revenue = addon.QuoteVendor(schematic, nil, nil, owned)
+    local quote, revenue = addon.QuoteVendor(schematic, nil, nil, addon.GetWork().owned)
     if quote and revenue and revenue > 0 then
         record.profit = revenue - quote.cost
     end
     if quote then record.netCost = quote.cost - (revenue or 0) end
-    if addon.SkillChance and rankInfo then
+    if rankInfo then
         record.skillChance = addon.SkillChance(record.info.recipeID,
             (rankInfo.skillLevel or 0) + (rankInfo.skillModifier or 0), record.info.maxTrivialLevel)
     end
-    local auction = GetSetting("auctionProfit") and addon.AuctionRevenue and addon.AuctionRevenue(schematic)
+    local auction = GetSetting("auctionProfit") and addon.AuctionRevenue(schematic)
     if quote and auction then record.ahProfit = auction - quote.cost end
 end
 
@@ -315,8 +388,7 @@ local function ListEntries()
                 if mode == "skill" then
                     entries[#entries + 1] = record
                 else
-                    local group = not info.learned and "Unlearned"
-                        or GetSetting("favorites") and info.favorite and "Favorites" or record.category
+                    local group = not info.learned and "Unlearned" or info.favorite and "Favorites" or record.category
                     if group ~= previousGroup then
                         entries[#entries + 1] = { group = group }
                         previousGroup = group
@@ -342,7 +414,7 @@ local function ListEntries()
 end
 
 local function SetMode(value)
-    mode = mode == value and "recipes" or value
+    mode = value
     offset = 0
     window.rightScroll:SetVerticalScroll(0)
     Refresh()
@@ -354,7 +426,7 @@ local function SelectRow(row, button)
         collapsed[entry.group] = not collapsed[entry.group]
         ListEntries()
     elseif button == "RightButton" then
-        if not linked and GetSetting("favorites") and entry.info.learned and C_TradeSkillUI.SetRecipeFavorite then
+        if not linked and entry.info.learned and C_TradeSkillUI.SetRecipeFavorite then
             C_TradeSkillUI.SetRecipeFavorite(entry.info.recipeID, not entry.info.favorite)
             QueueRefresh()
         end
@@ -376,7 +448,7 @@ local function HoverRow(row)
     local ok = pcall(GameTooltip.SetRecipeResultItem, GameTooltip, info.recipeID)
     if not ok or GameTooltip:NumLines() == 0 then GameTooltip:SetSpellByID(info.recipeID) end
     local entry = row.entry
-    if GetSetting("craftCounts") and entry.bagCrafts then
+    if entry.bagCrafts then
         GameTooltip:AddDoubleLine("Craftable with materials in bags", tostring(entry.bagCrafts))
         if entry.merchantCrafts and entry.merchantCrafts > entry.bagCrafts then
             GameTooltip:AddDoubleLine("Craftable after buying merchant reagents", tostring(entry.merchantCrafts))
@@ -393,27 +465,23 @@ local function NewRow(index)
     row.background = Surface(row, "BACKGROUND", colors.group)
     row.highlight = Surface(row, "HIGHLIGHT", colors.accent)
     row.highlight:SetAlpha(0.16)
-    row.count = Label(row, "GameFontNormalSmall", colors.text)
+    row.count = Label(row, "GameFontHighlightSmall", colors.text)
     row.count:SetJustifyH("RIGHT")
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(16, 16)
-    row.icon:SetPoint("LEFT", 8, 0)
-    row.name = Label(row, "GameFontNormalSmall", colors.text)
+    row.name = Label(row, "GameFontHighlightSmall", colors.text)
     row.name:SetJustifyH("LEFT")
     row.name:SetWordWrap(false)
-    row.profit = Label(row, "GameFontNormalSmall", colors.text)
-    row.profit:SetJustifyH("RIGHT")
-    row.difficulty = Label(row, "GameFontNormalSmall", colors.muted)
-    row.difficulty:SetWidth(42)
-    row.difficulty:SetPoint("RIGHT", -6, 0)
-    row.difficulty:SetJustifyH("RIGHT")
-    row.ah = Label(row, "GameFontNormalSmall", colors.text)
+    row.skill = Label(row, "GameFontHighlightSmall", colors.muted)
+    row.skill:SetWidth(34)
+    row.skill:SetPoint("RIGHT", -6, 0)
+    row.skill:SetJustifyH("RIGHT")
+    row.ah = Label(row, "GameFontHighlightSmall", colors.text)
     row.ah:SetJustifyH("RIGHT")
-    row.ah:SetWidth(65)
-    row.ah:SetPoint("RIGHT", row.difficulty, "LEFT", -5, 0)
-    row.profit:SetWidth(65)
+    row.ah:SetPoint("RIGHT", row.skill, "LEFT", -5, 0)
+    row.profit = Label(row, "GameFontHighlightSmall", colors.text)
+    row.profit:SetJustifyH("RIGHT")
     row.profit:SetPoint("RIGHT", row.ah, "LEFT", -5, 0)
-    row.name:SetPoint("RIGHT", row.profit, "LEFT", -8, 0)
     row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     row:SetScript("OnClick", SelectRow)
     row:SetScript("OnEnter", HoverRow)
@@ -427,6 +495,7 @@ DrawRows = function()
     local maximum = math.max(0, #entries - visible)
     offset = math.min(offset, maximum)
     local selected = SelectedRecipe()
+    local showVendor, showAuction = GetSetting("vendorProfit"), GetSetting("auctionProfit")
     local countWidth = 0
     for index = 1, visible do
         local entry = entries[index + offset]
@@ -435,32 +504,30 @@ DrawRows = function()
             row = row or NewRow(index)
             rows[index] = row
             row.entry = entry
-            row.ah:SetWidth(GetSetting("auctionProfit") and 65 or 1)
-            row.profit:SetWidth(GetSetting("vendorProfit") and 65 or 1)
+            row.ah:SetWidth(showAuction and 69 or 1)
+            row.profit:SetWidth(showVendor and 69 or 1)
             if entry.group then
                 Fill(row.background, colors.group)
                 row.background:Show()
-                row.icon:Hide()
+                row.icon:SetTexture(collapsed[entry.group] and "Interface\\Buttons\\UI-PlusButton-Up"
+                    or "Interface\\Buttons\\UI-MinusButton-Up")
                 row.count:SetText("")
-                row.name:SetText((collapsed[entry.group] and "+  " or "-  ") .. entry.group)
+                row.name:SetText(entry.group)
                 TextColor(row.name, colors.gold)
                 row.profit:SetText("")
                 row.ah:SetText("")
-                TextColor(row.profit, colors.muted)
-                TextColor(row.ah, colors.muted)
-                row.difficulty:SetText("")
+                row.skill:SetText("")
             else
                 local info = entry.info
                 Fill(row.background, colors.selected)
                 row.background:SetShown(selected ~= nil and selected.recipeID == info.recipeID)
                 row.icon:SetTexture(info.icon)
-                row.icon:Show()
-                row.name:SetText((GetSetting("favorites") and info.favorite and "* " or "") .. info.name)
+                row.name:SetText((info.favorite and "|A:auctionhouse-icon-favorite:12:12|a " or "") .. info.name)
                 PriceRecord(entry)
                 local nameColor = info.learned and (difficultyColors[info.relativeDifficulty] or colors.text) or colors.muted
                 TextColor(row.name, nameColor)
                 local counts = ""
-                if GetSetting("craftCounts") and entry.bagCrafts then
+                if entry.bagCrafts then
                     local have = entry.bagCrafts
                     if have > 0 then counts = tostring(have) end
                     if entry.merchantCrafts and entry.merchantCrafts > have then
@@ -472,16 +539,16 @@ DrawRows = function()
                 if counts ~= "" then countWidth = math.max(countWidth, row.count:GetStringWidth()) end
                 local text, color = "-", colors.muted
                 if entry.profit then text, color = ProfitText(entry.profit) end
-                row.profit:SetText(GetSetting("vendorProfit") and text or "")
+                row.profit:SetText(showVendor and text or "")
                 TextColor(row.profit, color)
                 local ahText, ahColor = "-", colors.muted
                 if entry.ahProfit then ahText, ahColor = ProfitText(entry.ahProfit) end
-                row.ah:SetText(GetSetting("auctionProfit") and ahText or "")
+                row.ah:SetText(showAuction and ahText or "")
                 TextColor(row.ah, ahColor)
-                local chance = GetSetting("skillChances") and entry.skillChance
-                row.difficulty:SetText(chance and ("%d%%"):format(math.floor(chance * 100 + 0.5))
-                    or (info.learned and difficulty[info.relativeDifficulty] or ""))
-                TextColor(row.difficulty, chance and chance > 0 and nameColor or colors.muted)
+                -- The name color already shows the difficulty, so this column only shows the chance.
+                local chance = entry.skillChance
+                row.skill:SetText(chance and ("%d%%"):format(math.floor(chance * 100 + 0.5)) or "")
+                TextColor(row.skill, chance and chance > 0 and nameColor or colors.muted)
             end
             row:Show()
         elseif row then
@@ -492,12 +559,13 @@ DrawRows = function()
     for index = 1, math.min(visible, #rows) do
         local row = rows[index]
         if row:IsShown() then
+            local x = row.entry.group and 6 or iconX
             row.count:ClearAllPoints()
             row.count:SetPoint("RIGHT", row, "LEFT", iconX - 5, 0)
             row.icon:ClearAllPoints()
-            row.icon:SetPoint("LEFT", iconX, 0)
+            row.icon:SetPoint("LEFT", x, 0)
             row.name:ClearAllPoints()
-            row.name:SetPoint("LEFT", row, "LEFT", row.entry.group and 8 or iconX + 21, 0)
+            row.name:SetPoint("LEFT", row, "LEFT", x + 21, 0)
             row.name:SetPoint("RIGHT", row.profit, "LEFT", -8, 0)
         end
     end
@@ -511,18 +579,6 @@ DrawRows = function()
     window.empty:SetShown(#entries == 0)
 end
 
-local function DirectReagents(schematic, batches)
-    local amounts = {}
-    for _, slot in ipairs(schematic and schematic.reagentSlotSchematics or {}) do
-        local reagent = slot.reagents[1]
-        if slot.reagentType == Enum.CraftingReagentType.Basic and reagent and reagent.itemID then
-            local id = reagent.itemID
-            amounts[id] = (amounts[id] or 0) + slot.quantityRequired * batches
-        end
-    end
-    return amounts
-end
-
 local function MaterialIDs(amounts)
     local ids = {}
     for id in pairs(amounts) do ids[#ids + 1] = id end
@@ -530,83 +586,148 @@ local function MaterialIDs(amounts)
     return ids
 end
 
-local function MaterialLines(amounts)
-    local lines = {}
+-- The shopping list and the queue are lists of lines: a header, a saved craft, a craft step, or a material.
+local function AddMaterials(lines, header, amounts)
+    if not next(amounts) then return end
+    if header then lines[#lines + 1] = { header = header } end
     for _, id in ipairs(MaterialIDs(amounts)) do
-        local icon = C_Item.GetItemIconByID(id) or 134400
-        local amount = amounts[id]
         local unitPrice, source = addon.PurchasePrice(id)
-        local cost = unitPrice and (Money(unitPrice * amount) .. "  " .. source) or "Price unavailable"
-        lines[#lines + 1] = ("|T%d:16:16|t  %d x %s  |cff9eaab5%s|r"):format(icon, amount, ItemName(id), cost)
+        lines[#lines + 1] = {
+            itemID = id, icon = C_Item.GetItemIconByID(id),
+            text = ("%d x %s"):format(amounts[id], ItemName(id)),
+            right = unitPrice and (Money(unitPrice * amounts[id]) .. "  " .. source) or "Price unavailable",
+        }
     end
-    return table.concat(lines, "\n")
 end
 
-local function DrawShopping(info, schematic)
-    if addon.ShoppingPlan then
-        local needs, prerequisites, jobs = addon.ShoppingPlan(BagCount)
-        window.needs, window.prerequisites, window.jobs = needs, prerequisites, jobs
-        if #jobs > 0 then
-            local lines = { "|cffffd459Saved crafts|r" }
-            for _, job in ipairs(jobs) do
-                lines[#lines + 1] = ("%d × %s"):format(job.quantity, C_Spell.GetSpellName(job.id) or ("Recipe #" .. job.id))
-            end
-            local merchant, auction = {}, {}
-            for id, quantity in pairs(needs) do
-                local _, source = addon.PurchasePrice(id)
-                if source == "merchant" then merchant[id] = quantity else auction[id] = quantity end
-            end
-            if next(merchant) then
-                lines[#lines + 1] = "\n|cffffd459Buy from a merchant|r\n" .. MaterialLines(merchant)
-            end
-            if next(auction) then
-                lines[#lines + 1] = "\n|cffffd459Buy on the Auction House|r\n" .. MaterialLines(auction)
-            end
-            if not next(needs) then lines[#lines + 1] = "\nYou have the required materials in your bags." end
-            if #prerequisites > 0 then
-                lines[#lines + 1] = "\n|cffffd459Craft first|r"
-                for _, step in ipairs(prerequisites) do
-                    lines[#lines + 1] = ("%d × %s"):format(step.batches, step.recipeName or ItemName(step.itemID))
-                end
-            end
-            return table.concat(lines, "\n")
-        end
+local function AddJobs(lines, jobs)
+    for _, job in ipairs(jobs) do
+        lines[#lines + 1] = { job = job.id, spellID = job.id, icon = C_Spell.GetSpellTexture(job.id),
+            text = ("%d × %s"):format(job.quantity, SpellName(job.id)) }
     end
-    if not info then return "Select a recipe and add it to the list." end
+end
+
+local function AddCrafts(lines, steps, right)
+    for _, step in ipairs(steps) do
+        lines[#lines + 1] = { spellID = step.recipeID, icon = C_Spell.GetSpellTexture(step.recipeID), right = right,
+            text = ("%d × %s"):format(step.batches, step.recipeName or ItemName(step.itemID)) }
+    end
+end
+
+local function ShoppingLines(info, schematic)
+    local lines = {}
+    local needs, prerequisites, jobs = addon.ShoppingPlan(BagCount)
+    window.needs, window.prerequisites, window.jobs = needs, prerequisites, jobs
+    if #jobs > 0 then
+        lines[1] = { header = "Saved crafts" }
+        AddJobs(lines, jobs)
+        local merchant, auction = {}, {}
+        for id, quantity in pairs(needs) do
+            local _, source = addon.PurchasePrice(id)
+            if source == "merchant" then merchant[id] = quantity else auction[id] = quantity end
+        end
+        AddMaterials(lines, "Buy from a merchant", merchant)
+        AddMaterials(lines, "Buy on the Auction House", auction)
+        if #prerequisites > 0 then
+            lines[#lines + 1] = { header = "Craft first" }
+            AddCrafts(lines, prerequisites)
+        end
+        return next(needs) and "" or "You have the required materials in your bags.", lines
+    end
+    if not info then return "Select a recipe and add it to the list.", lines end
     local count = Quantity()
     local quote = addon.QuoteVendor(schematic, page.SchematicForm:GetTransaction(), count)
-    local needs
     if quote then
         needs = addon.ShoppingNeeds(quote, BagCount)
     else
-        needs = DirectReagents(schematic, count)
+        needs = addon.DirectReagents(schematic, count)
         for id, amount in pairs(needs) do
             needs[id] = amount > BagCount(id) and amount - BagCount(id) or nil
         end
     end
-    local intro = ("%d %s of %s"):format(count, count == 1 and "craft" or "crafts", info.name)
     window.needs = needs
-    local details = next(needs) and MaterialLines(needs) or "You have the required materials in your bags."
+    local intro = ("%d %s of %s"):format(count, count == 1 and "craft" or "crafts", info.name)
     if not quote then intro = intro .. "\nSome prices are missing. Showing direct reagents." end
-    return intro .. "\n\n" .. details
+    if not next(needs) then intro = intro .. "\nYou have the required materials in your bags." end
+    AddMaterials(lines, nil, needs)
+    return intro, lines
 end
 
-local function DrawQueue()
+local function QueueLines()
+    local lines = {}
     local needs, prerequisites, jobs = addon.ShoppingPlan(BagCount)
     window.needs, window.prerequisites, window.jobs = needs, prerequisites, jobs
-    if #jobs == 0 then return "Add a recipe to the shopping list to queue it." end
-    local lines = {}
-    for _, step in ipairs(prerequisites) do
-        lines[#lines + 1] = ("%d × %s  |cffabb7c4Reagent|r"):format(step.batches, step.recipeName or ItemName(step.itemID))
-    end
-    for _, job in ipairs(jobs) do
-        lines[#lines + 1] = ("%d × %s"):format(job.quantity, C_Spell.GetSpellName(job.id) or ("Recipe #" .. job.id))
-    end
-    if next(needs) then lines[#lines + 1] = "\nOpen the shopping list to see missing materials." end
+    if #jobs == 0 then return "Add a recipe to the shopping list to queue it.", lines end
+    AddCrafts(lines, prerequisites, "Reagent")
+    AddJobs(lines, jobs)
+    local notes = {}
+    if next(needs) then notes[#notes + 1] = "Open the shopping list to see missing materials." end
     if craftingJob then
-        lines[#lines + 1] = ("\nCrafting %d of %d complete"):format(craftingJob.done, craftingJob.count)
+        notes[#notes + 1] = ("Crafting %d of %d complete"):format(craftingJob.done, craftingJob.count)
     end
-    return table.concat(lines, "\n")
+    return table.concat(notes, "\n"), lines
+end
+
+local function ChangeJob(id, delta)
+    local shopping = addon.GetWork().shopping
+    local job = shopping[id]
+    if not job then return end
+    job.quantity = math.min(999, job.quantity + delta)
+    if job.quantity <= 0 then shopping[id] = nil end
+    DrawDetail()
+end
+
+local function ItemTooltip(self)
+    local entry = self.entry
+    if not (entry.itemID or entry.spellID) then return end
+    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+    if entry.itemID then GameTooltip:SetItemByID(entry.itemID) else GameTooltip:SetSpellByID(entry.spellID) end
+    GameTooltip:Show()
+end
+
+local function LineRow(panel, index)
+    local row = CreateFrame("Frame", nil, panel)
+    row:SetPoint("TOPLEFT", 0, -(index - 1) * lineHeight)
+    row:SetPoint("TOPRIGHT", 0, -(index - 1) * lineHeight)
+    row:SetHeight(lineHeight)
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", ItemTooltip)
+    row:SetScript("OnLeave", addon.HideRoute)
+    row:SetScript("OnHide", addon.HideRoute)
+    row.icon = row:CreateTexture(nil, "ARTWORK")
+    row.icon:SetSize(18, 18)
+    row.icon:SetPoint("LEFT")
+    row.label = Label(row, "GameFontHighlight", colors.text)
+    row.right = Label(row, "GameFontHighlightSmall", colors.muted)
+    row.right:SetPoint("RIGHT", -3, 0)
+    row.more = Button(row, "+", 22, function() ChangeJob(row.entry.job, 1) end)
+    row.more:SetPoint("RIGHT", -3, 0)
+    row.less = Button(row, "-", 22, function() ChangeJob(row.entry.job, -1) end)
+    row.less:SetPoint("RIGHT", row.more, "LEFT", -2, 0)
+    return row
+end
+
+local function DrawLines(lines)
+    local panel = window.lines
+    panel:SetShown(#lines > 0)
+    for index, entry in ipairs(lines) do
+        local row = panel.rows[index] or LineRow(panel, index)
+        panel.rows[index] = row
+        row.entry = entry
+        row.icon:SetShown(not entry.header)
+        row.icon:SetTexture(entry.icon or 134400)
+        row.label:ClearAllPoints()
+        row.label:SetPoint("LEFT", entry.header and 0 or 24, 0)
+        row.label:SetText(entry.header or entry.text)
+        TextColor(row.label, entry.header and colors.gold or colors.text)
+        row.right:SetText(entry.right or "")
+        row.more:SetShown(entry.job ~= nil)
+        row.less:SetShown(entry.job ~= nil)
+        row:Show()
+    end
+    for index = #lines + 1, #panel.rows do panel.rows[index]:Hide() end
+    panel:SetHeight(math.max(1, #lines * lineHeight))
+    return #lines > 0 and #lines * lineHeight + 8 or 0
 end
 
 local function SetAmount(region, amount)
@@ -616,7 +737,7 @@ end
 local function DrawSkillBar(info)
     local bar = window.skillRange
     local first, yellow, green, gray
-    if info and not linked and GetSetting("skillChances") then
+    if info and not linked then
         first, yellow, green, gray = addon.SkillRange(info.recipeID, info.maxTrivialLevel)
     end
     local show = first ~= nil and gray > first
@@ -654,60 +775,49 @@ local function ReagentRow(panel, index)
     row:SetPoint("TOPRIGHT", 0, -20 - (index - 1) * 36)
     row:SetHeight(36)
     row:EnableMouse(true)
-    row:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetItemByID(self.itemID)
-        GameTooltip:Show()
-    end)
+    row:SetScript("OnEnter", ItemTooltip)
     row:SetScript("OnLeave", addon.HideRoute)
     row:SetScript("OnHide", addon.HideRoute)
     row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
     row.check:SetSize(18, 18)
     row.check:SetPoint("LEFT")
     row.check:SetScript("OnClick", function(check)
-        addon.GetWork().owned[row.itemID] = not check:GetChecked() or nil
+        addon.GetWork().owned[row.entry.itemID] = not check:GetChecked() or nil
         QueueRefresh()
     end)
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetSize(28, 28)
     row.name = Label(row, "GameFontHighlight", colors.text)
     row.name:SetPoint("TOPLEFT", row.icon, "TOPRIGHT", 7, 0)
-    row.required = Label(row, "GameFontNormalSmall", colors.text)
+    row.required = Label(row, "GameFontHighlightSmall", colors.text)
     row.required:SetPoint("BOTTOMLEFT", row.icon, "BOTTOMRIGHT", 7, 0)
-    row.bags = Label(row, "GameFontNormalSmall", colors.muted)
+    row.bags = Label(row, "GameFontHighlightSmall", colors.muted)
     row.bags:SetPoint("RIGHT", -46, 0)
-    row.bank = Label(row, "GameFontNormalSmall", colors.muted)
+    row.bank = Label(row, "GameFontHighlightSmall", colors.muted)
     row.bank:SetPoint("RIGHT", -3, 0)
     return row
 end
 
 local function DrawReagents(schematic)
     local panel = window.reagents
-    local amounts = DirectReagents(schematic, 1)
+    local amounts = addon.DirectReagents(schematic, 1)
     local ids = MaterialIDs(amounts)
-    local showInventory, showChecks = GetSetting("inventory"), GetSetting("owned") and not linked
     local owned = addon.GetWork().owned
     panel:SetShown(#ids > 0)
-    panel.bags:SetShown(showInventory)
-    panel.bank:SetShown(showInventory)
     for index, id in ipairs(ids) do
         local row = panel.rows[index] or ReagentRow(panel, index)
         panel.rows[index] = row
-        row.itemID = id
+        row.entry = { itemID = id }
         local have, need = BagCount(id), amounts[id]
         row.icon:SetTexture(C_Item.GetItemIconByID(id) or 134400)
-        row.icon:SetPoint("LEFT", showChecks and 23 or 0, 0)
+        row.icon:SetPoint("LEFT", linked and 0 or 23, 0)
         row.name:SetText(ItemName(id))
         row.required:SetText(("%d/%d"):format(have, need))
         TextColor(row.required, have >= need and colors.text or colors.loss)
-        row.check:SetShown(showChecks)
+        row.check:SetShown(not linked)
         row.check:SetChecked(not owned[id])
-        row.bags:SetShown(showInventory)
-        row.bank:SetShown(showInventory)
-        if showInventory then
-            row.bags:SetText(have)
-            row.bank:SetText(math.max(0, (C_Item.GetItemCount(id, true, false, true) or have) - have))
-        end
+        row.bags:SetText(have)
+        row.bank:SetText(math.max(0, (C_Item.GetItemCount(id, true, false, true) or have) - have))
         row:Show()
     end
     for index = #ids + 1, #panel.rows do panel.rows[index]:Hide() end
@@ -723,6 +833,7 @@ local function RecipeDescription(info)
         if ok then description = text end
     end
     description = description or C_Spell.GetSpellDescription(info.recipeID) or ""
+    if not info.learned then description = "Recipe not learned\n" .. description end
     if C_TradeSkillUI.GetRecipeRequirements and not info.offline and not linked then
         local ok, requirements = pcall(C_TradeSkillUI.GetRecipeRequirements, info.recipeID)
         local names = {}
@@ -731,6 +842,8 @@ local function RecipeDescription(info)
         end
         if #names > 0 then description = description .. "\nRequires: " .. table.concat(names, ", ") end
     end
+    local source = addon.RecipeSource(info.recipeID)
+    if source then description = description .. "\n" .. source end
     return description
 end
 
@@ -738,70 +851,73 @@ DrawDetail = function()
     local info, schematic = SelectedRecipe()
     local shopping, queue, tools = mode == "shopping", mode == "queue", mode == "tools"
     local special = shopping or queue or tools
+    for key, tab in pairs(window.tabs) do
+        local active = key == mode or (key == "recipes" and not (shopping or queue))
+        if tab.inner then
+            Fill(tab.inner, active and colors.selected or colors.button)
+            TextColor(tab.label, active and colors.accent or colors.text)
+        elseif active then
+            tab:LockHighlight()
+        else
+            tab:UnlockHighlight()
+        end
+    end
     window.detail:SetShown(info ~= nil or special)
     if not info and not special then return end
     window.rightContent:SetWidth(math.max(1, window.rightScroll:GetWidth()))
     schematic = schematic or (info and GetSchematic(info))
     local count = Quantity()
-    local learned = info and info.learned == true and not linked
+    local learned = info ~= nil and info.learned == true and not linked
     local craftable = learned and page:GetCraftableCount() or 0
     local showBar = DrawSkillBar(not special and info or nil)
     window.rightScroll:SetPoint("TOPLEFT", 12, showBar and -115 or -65)
-    window.rightScroll:SetPoint("BOTTOMRIGHT", -32, special and 82 or 184)
-    local reagentsHeight = 0
-    if special then window.reagents:Hide() end
+    if special then
+        window.rightScroll:SetPoint("BOTTOMRIGHT", -32, 42)
+    else
+        window.rightScroll:SetPoint("BOTTOMRIGHT", window.addShopping, "TOPRIGHT", -20, 10)
+    end
+
     window.recipeName:SetText(shopping and "Shopping list"
         or queue and "Crafting queue" or tools and "Profession tools" or info.name)
-    window.recipeIcon:SetTexture(info and info.icon or 134400)
-    window.favorite:SetShown(learned == true and not special and GetSetting("favorites"))
+    window.recipeIcon:SetTexture(not special and info.icon or 134400)
+    window.favorite:SetShown(learned and not special)
     window.favorite.star:SetAtlas(info and info.favorite and "auctionhouse-icon-favorite" or "auctionhouse-icon-favorite-off")
-    window.track:SetShown(learned == true and not special)
+    window.track:SetShown(learned and not special)
     if window.track:IsShown() then
         window.track:SetChecked(C_TradeSkillUI.IsRecipeTracked(info.recipeID, false))
     end
-    window.searchPrices:SetShown(shopping and AuctionHouseFrame ~= nil and AuctionHouseFrame:IsShown())
-    window.create:SetShown(not special)
-    window.createAll:SetShown(not special)
-    window.create:SetEnabled(learned == true and page.CreateButton:IsEnabled() and count <= craftable)
-    window.createAll:SetEnabled(learned == true and page.CreateAllButton:IsEnabled() and craftable > 0)
-    window.createAll.label:SetText(("Create all (%d)"):format(craftable))
     window.profitPanel:SetShown(not special)
-    if window.addShopping then
-        window.addShopping:SetShown(GetSetting("shopping") and not special and schematic ~= nil)
-        window.queueNext:SetShown(queue)
-        window.removeShopping:SetShown(shopping and info ~= nil and addon.GetWork().shopping[info.recipeID] ~= nil)
-        window.manageShopping:SetShown(shopping and next(addon.GetWork().shopping) ~= nil)
-        window.buy:SetShown(shopping and GetSetting("buy") and
-            ((AuctionHouseFrame and AuctionHouseFrame:IsShown()) or (MerchantFrame and MerchantFrame:IsShown()) or false))
-        window.moreQuantity:SetShown(not (queue or tools))
-        window.lessQuantity:SetShown(not (queue or tools))
-        window.quantity:SetShown(not (queue or tools))
-        window.draft:SetShown(linked == true and not special and info ~= nil and info.learned == true)
-        window.create:SetShown(not special and not linked)
-        window.createAll:SetShown(not special and not linked)
-    end
+    window.addShopping:SetShown(not special and schematic ~= nil)
+    window.create:SetShown(not special and not linked)
+    window.createAll:SetShown(not special and not linked)
+    window.create:SetEnabled(learned and page.CreateButton:IsEnabled() and count <= craftable)
+    window.createAll:SetEnabled(learned and page.CreateAllButton:IsEnabled() and craftable > 0)
+    window.createAll.label:SetText(("Create all (%d)"):format(craftable))
+    window.quantity:SetShown(not (queue or tools))
+    window.lessQuantity:SetShown(not (queue or tools))
+    window.moreQuantity:SetShown(not (queue or tools))
+    window.searchPrices:SetShown(shopping and AuctionHouseOpen())
+    window.buy:SetShown(shopping and (AuctionHouseOpen() or (MerchantFrame ~= nil and MerchantFrame:IsShown())))
+    window.queueNext:SetShown(queue)
 
+    local text, lines, reagentsHeight = "", {}, 0
     if shopping then
-        window.materials:SetText(DrawShopping(info, schematic))
+        text, lines = ShoppingLines(info, schematic)
     elseif queue then
-        window.materials:SetText(DrawQueue())
+        text, lines = QueueLines()
     elseif tools then
-        window.materials:SetText(addon.ToolText and addon.ToolText(window.tool, info, schematic) or "")
+        text = addon.ToolText(window.tool)
     else
-        local description = RecipeDescription(info)
-        if not info.learned then description = "Recipe not learned\n" .. description end
-        if GetSetting("sources") and addon.RecipeSource then
-            local source = addon.RecipeSource(info.recipeID)
-            if source then description = description .. "\n" .. source end
-        end
-        window.materials:SetText(description)
-        reagentsHeight = DrawReagents(schematic)
+        text = RecipeDescription(info)
     end
-    window.rightContent:SetHeight(math.max(1, window.materials:GetStringHeight() + reagentsHeight + 12))
+    window.materials:SetText(text)
+    if special then window.reagents:Hide() else reagentsHeight = DrawReagents(schematic) end
+    local linesHeight = DrawLines(lines)
+    window.rightContent:SetHeight(math.max(1, window.materials:GetStringHeight() + reagentsHeight + linesHeight + 12))
     if special then return end
-    local owned = addon.GetWork and GetSetting("owned") and addon.GetWork().owned or nil
+
     local transaction = not window.preview and page.SchematicForm:GetTransaction() or nil
-    local quote, revenue = addon.QuoteVendor(schematic, transaction, nil, owned)
+    local quote, revenue = addon.QuoteVendor(schematic, transaction, nil, addon.GetWork().owned)
     SetAmount(window.cost, quote and quote.cost)
     SetAmount(window.revenue, revenue)
     local value, color = "-", colors.muted
@@ -813,24 +929,24 @@ DrawDetail = function()
     window.profitHover.quote, window.profitHover.revenue = quote, revenue
     window.profitHover.status = not schematic and "Recipe data unavailable" or nil
     if GameTooltip:IsOwned(window.profitHover) then addon.ShowRoute(window.profitHover) end
-    if window.auctionLine then
-        local auction, gross
-        if GetSetting("auctionProfit") then auction, gross = addon.AuctionRevenue(schematic) end
-        local result = auction and quote and auction - quote.cost
-        local ahText, ahColor = "-", colors.muted
-        if result then ahText, ahColor = ProfitText(result) end
-        if result and quote.cost > 0 and GetSetting("roi") then
-            ahText = ahText .. ("  (%+.0f%% ROI)"):format(result * 100 / quote.cost)
-        end
-        window.auctionLine:SetShown(GetSetting("auctionProfit"))
-        window.auctionValue:SetShown(GetSetting("auctionProfit"))
-        window.auctionSaleLabel:SetShown(GetSetting("auctionProfit"))
-        window.auctionSale:SetShown(GetSetting("auctionProfit"))
-        SetAmount(window.auctionSale, gross)
-        window.auctionValue:SetText(ahText)
-        TextColor(window.auctionValue, ahColor)
-        window.profitHover:SetShown(GetSetting("vendorProfit"))
+
+    local showAuction = GetSetting("auctionProfit")
+    window.profitPanel:SetHeight(showAuction and 93 or 57)
+    local auction, gross
+    if showAuction then auction, gross = addon.AuctionRevenue(schematic) end
+    local result = auction and quote and auction - quote.cost
+    local ahText, ahColor = "-", colors.muted
+    if result then ahText, ahColor = ProfitText(result) end
+    if result and quote.cost > 0 then
+        ahText = ahText .. ("  (%+.0f%% ROI)"):format(result * 100 / quote.cost)
     end
+    window.auctionLine:SetShown(showAuction)
+    window.auctionValue:SetShown(showAuction)
+    window.auctionSaleLabel:SetShown(showAuction)
+    window.auctionSale:SetShown(showAuction)
+    SetAmount(window.auctionSale, gross)
+    window.auctionValue:SetText(ahText)
+    TextColor(window.auctionValue, ahColor)
 end
 
 local function Craft(all)
@@ -859,54 +975,17 @@ local function LinkProfession()
 end
 
 local function SearchPrices()
-    if not (AuctionHouseFrame and AuctionHouseFrame:IsShown()) then return end
     local _, schematic = SelectedRecipe()
-    if addon.SearchMaterials then
-        local items = addon.PriceCandidates(schematic)
-        for id in pairs(window.needs or {}) do items[id] = true end
-        for _, job in ipairs(window.jobs or {}) do
-            for id in pairs(addon.PriceCandidates(addon.OfflineSchematic(job.id))) do items[id] = true end
-        end
-        return addon.SearchMaterials(items)
+    local items = addon.PriceCandidates(schematic)
+    for id in pairs(window.needs or {}) do items[id] = true end
+    for _, job in ipairs(window.jobs or {}) do
+        for id in pairs(addon.PriceCandidates(addon.OfflineSchematic(job.id))) do items[id] = true end
     end
-    local names = {}
-    for id in pairs(addon.PriceCandidates(schematic)) do
-        local name = C_Item.GetItemNameByID(id)
-        if name then names[#names + 1] = name end
-    end
-    if #names == 0 then return end
-    table.sort(names)
-    local api = Auctionator.API.v1
-    local search = api.MultiSearchExact or api.MultiSearch
-    search(addonName, names)
-end
-
-local function ManageShopping(button)
-    local shopping = addon.GetWork().shopping
-    MenuUtil.CreateContextMenu(button, function(_, menu)
-        local ids = {}
-        for id in pairs(shopping) do ids[#ids + 1] = id end
-        table.sort(ids)
-        for _, id in ipairs(ids) do
-            local recipe = id
-            local name = C_Spell.GetSpellName(recipe) or ("Recipe #" .. recipe)
-            local sub = menu:CreateButton(("%d × %s"):format(shopping[recipe].quantity, name))
-            sub:CreateButton("Add one", function()
-                shopping[recipe].quantity = math.min(999, shopping[recipe].quantity + 1)
-                DrawDetail()
-            end)
-            sub:CreateButton("Remove one", function()
-                shopping[recipe].quantity = shopping[recipe].quantity - 1
-                if shopping[recipe].quantity == 0 then shopping[recipe] = nil end
-                DrawDetail()
-            end)
-            sub:CreateButton("Remove recipe", function() shopping[recipe] = nil; DrawDetail() end)
-        end
-    end)
+    addon.SearchMaterials(items)
 end
 
 local function BuyMaterials()
-    if AuctionHouseFrame and AuctionHouseFrame:IsShown() then
+    if AuctionHouseOpen() then
         local needed = {}
         for id, count in pairs(window.needs or {}) do
             local _, source = addon.PurchasePrice(id)
@@ -925,16 +1004,16 @@ local function BuyMaterials()
     StaticPopupDialogs.VENDORPROFIT_BUY = StaticPopupDialogs.VENDORPROFIT_BUY or {
         text = "Buy these materials for %s?",
         button1 = BUY, button2 = CANCEL, timeout = 0, whileDead = false, hideOnEscape = true,
-        OnAccept = function(_, pending)
+        OnAccept = function(_, approved)
             if not (MerchantFrame and MerchantFrame:IsShown()) then return end
-            local current = addon.MerchantOffers(pending.needs)
-            if #current ~= #pending.offers then return end
+            local current = addon.MerchantOffers(approved.needs)
+            if #current ~= #approved.offers then return end
             for index, offer in ipairs(current) do
-                local approved = pending.offers[index]
-                if offer.id ~= approved.id or offer.index ~= approved.index or offer.total ~= approved.total
-                    or offer.quantity ~= approved.quantity then return end
+                local expected = approved.offers[index]
+                if offer.id ~= expected.id or offer.index ~= expected.index or offer.total ~= expected.total
+                    or offer.quantity ~= expected.quantity then return end
             end
-            if GetMoney() < pending.total then return end
+            if GetMoney() < approved.total then return end
             for _, offer in ipairs(current) do BuyMerchantItem(offer.index, offer.quantity) end
             QueueRefresh()
         end,
@@ -955,7 +1034,7 @@ local function CraftNext()
     local info = C_TradeSkillUI.GetRecipeInfo(nextJob.id)
     if not info or not info.learned or (C_TradeSkillUI.IsRecipeInSkillLine
         and not C_TradeSkillUI.IsRecipeInSkillLine(nextJob.id, professionID)) then
-        print("Vendor Profit: open the profession for " .. (C_Spell.GetSpellName(nextJob.id) or nextJob.id) .. ".")
+        print("Vendor Profit: open the profession for " .. SpellName(nextJob.id) .. ".")
         return
     end
     window.preview = nil
@@ -973,23 +1052,13 @@ end
 
 local function OpenTools(button)
     MenuUtil.CreateContextMenu(button, function(_, menu)
-        menu:CreateButton("Settings", addon.OpenSettings)
-        if GetSetting("queue") then menu:CreateButton("Crafting queue", function() SetMode("queue") end) end
-        if GetSetting("skillChances") then menu:CreateButton("Best for skill-ups", function() SetMode("skill") end) end
-        if addon.ToolEntries then
-            local info, schematic = SelectedRecipe()
-            for _, entry in ipairs(addon.ToolEntries(schematic or (info and GetSchematic(info)))) do
-                local key = entry[1]
-                menu:CreateButton(entry[2], function()
-                    if entry[3] then
-                        entry[3](SelectedRecipe())
-                    else
-                        window.tool = key
-                        mode = "tools"
-                        Refresh()
-                    end
-                end)
-            end
+        local info, schematic = SelectedRecipe()
+        for _, entry in ipairs(addon.ToolEntries(schematic or (info and GetSchematic(info)))) do
+            local key = entry[1]
+            menu:CreateButton(entry[2], function()
+                window.tool = key
+                SetMode("tools")
+            end)
         end
     end)
 end
@@ -999,11 +1068,15 @@ local function OpenFilter(button)
         for _, option in ipairs({
             { "all", "All recipes" }, { "learned", "Learned recipes" },
             { "favorites", "Favorites" }, { "profit", "Vendor profit above zero" },
+            { "skill", "Best for skill-ups" },
         }) do
             local key, label = unpack(option)
-            menu:CreateRadio(label, function() return filter == key end, function()
-                filter, mode, offset = key, "recipes", 0
-                Refresh()
+            menu:CreateRadio(label, function()
+                if mode == "skill" or key == "skill" then return mode == key end
+                return filter == key
+            end, function()
+                if key ~= "skill" then filter = key end
+                SetMode(key == "skill" and "skill" or "recipes")
             end)
         end
     end)
@@ -1013,7 +1086,7 @@ local function BuildList()
     local search = CreateFrame("EditBox", nil, window, "SearchBoxTemplate")
     window.search = search
     search:SetSize(listWidth - 76, 24)
-    search:SetPoint("TOPLEFT", 8, -69)
+    search:SetPoint("TOPLEFT", 8, -67)
     search:SetAutoFocus(false)
     search:SetScript("OnTextChanged", function(self)
         SearchBoxTemplate_OnTextChanged(self)
@@ -1034,7 +1107,7 @@ local function BuildList()
     columnSkill:SetPoint("RIGHT", -18, 0)
     columnSkill:SetText("Skill")
     window.columnAH = Label(columns, "GameFontNormalSmall", colors.muted)
-    window.columnAH:SetPoint("RIGHT", -67, 0)
+    window.columnAH:SetPoint("RIGHT", -57, 0)
     window.columnAH:SetText("Auction")
     window.columnVendor = Label(columns, "GameFontNormalSmall", colors.muted)
     window.columnVendor:SetText("Vendor")
@@ -1050,7 +1123,7 @@ local function BuildList()
         offset = math.max(0, offset - delta * 3)
         DrawRows()
     end)
-    window.empty = Label(list, "GameFontNormalSmall", colors.muted)
+    window.empty = Label(list, "GameFontHighlightSmall", colors.muted)
     window.empty:SetPoint("TOPLEFT", 8, -8)
     window.empty:SetText("No matching recipes")
 
@@ -1073,20 +1146,19 @@ local function BuildList()
             DrawRows()
         end
     end)
-
 end
 
 local function BuildDetail()
     local detail = CreateFrame("Frame", nil, window)
     window.detail = detail
-    detail:SetPoint("TOPLEFT", listWidth + 16, -70)
+    detail:SetPoint("TOPLEFT", listWidth + 16, -67)
     detail:SetPoint("BOTTOMRIGHT", -8, 8)
     Surface(detail, "BACKGROUND", colors.panel)
     window.recipeIcon = detail:CreateTexture(nil, "ARTWORK")
     window.recipeIcon:SetSize(42, 42)
     window.recipeIcon:SetPoint("TOPLEFT", 12, -12)
     window.recipeName = Label(detail, "GameFontNormalLarge", colors.text)
-    window.recipeName:SetPoint("LEFT", window.recipeIcon, "RIGHT", 8, 0)
+    window.recipeName:SetPoint("TOPLEFT", window.recipeIcon, "TOPRIGHT", 8, -1)
     window.recipeName:SetPoint("RIGHT", -144, 0)
     window.recipeName:SetJustifyH("LEFT")
     window.recipeName:SetWordWrap(false)
@@ -1098,14 +1170,14 @@ local function BuildDetail()
             QueueRefresh()
         end
     end)
-    window.favorite:SetPoint("TOPRIGHT", -12, -21)
-    window.favorite.star = window.favorite:CreateTexture(nil, "ARTWORK")
+    window.favorite:SetPoint("TOPRIGHT", -12, -12)
+    window.favorite.star = window.favorite:CreateTexture(nil, "OVERLAY")
     window.favorite.star:SetSize(16, 16)
     window.favorite.star:SetPoint("CENTER")
     window.track = CreateFrame("CheckButton", nil, detail, "UICheckButtonTemplate")
     window.track:SetSize(22, 22)
-    window.track:SetPoint("TOPRIGHT", -44, -22)
-    local track = Label(window.track, "GameFontNormalSmall", colors.muted)
+    window.track:SetPoint("TOPRIGHT", -44, -12)
+    local track = Label(window.track, "GameFontHighlightSmall", colors.muted)
     track:SetPoint("RIGHT", window.track, "LEFT", -4, 0)
     track:SetText("Track recipe")
     window.track:SetScript("OnClick", function(self)
@@ -1115,8 +1187,8 @@ local function BuildDetail()
 
     local range = CreateFrame("Frame", nil, detail)
     window.skillRange = range
-    range:SetPoint("TOPLEFT", 12, -61)
-    range:SetPoint("TOPRIGHT", -24, -61)
+    range:SetPoint("TOPLEFT", 12, -64)
+    range:SetPoint("TOPRIGHT", -24, -64)
     range:SetHeight(42)
     range.segments, range.labels = {}, {}
     for index = 1, 4 do
@@ -1124,18 +1196,18 @@ local function BuildDetail()
         segment:SetHeight(9)
         Fill(segment, difficultyColors[index - 1])
         range.segments[index] = segment
-        range.labels[index] = Label(range, "GameFontNormalSmall", colors.muted)
+        range.labels[index] = Label(range, "GameFontHighlightSmall", colors.muted)
     end
     range.marker = range:CreateTexture(nil, "OVERLAY")
     range.marker:SetSize(2, 13)
     Fill(range.marker, colors.text)
-    range.chance = Label(range, "GameFontNormalSmall", colors.text)
+    range.chance = Label(range, "GameFontHighlightSmall", colors.text)
     range.chance:SetPoint("TOPRIGHT", 0, -28)
 
     local scroll = CreateFrame("ScrollFrame", nil, detail)
     window.rightScroll = scroll
-    scroll:SetPoint("TOPLEFT", 12, -91)
-    scroll:SetPoint("BOTTOMRIGHT", -32, 112)
+    scroll:SetPoint("TOPLEFT", 12, -65)
+    scroll:SetPoint("BOTTOMRIGHT", -32, 165)
     local content = CreateFrame("Frame", nil, scroll)
     content:SetSize(1, 1)
     scroll:SetScrollChild(content)
@@ -1151,33 +1223,42 @@ local function BuildDetail()
     window.materials:SetJustifyH("LEFT")
     window.materials:SetJustifyV("TOP")
     window.materials:SetSpacing(4)
-    scroll:SetScript("OnSizeChanged", function(self, width) content:SetWidth(math.max(1, width)) end)
+    scroll:SetScript("OnSizeChanged", function(_, width) content:SetWidth(math.max(1, width)) end)
+
     local reagents = CreateFrame("Frame", nil, content)
     window.reagents = reagents
     reagents:SetPoint("TOPLEFT", window.materials, "BOTTOMLEFT", 0, -12)
     reagents:SetPoint("TOPRIGHT", window.materials, "BOTTOMRIGHT", 0, -12)
     reagents:SetHeight(1)
     reagents.rows = {}
-    local reagentTitle = Label(reagents, "GameFontHighlight", colors.gold)
+    local reagentTitle = Label(reagents, "GameFontNormal", colors.gold)
     reagentTitle:SetPoint("TOPLEFT")
     reagentTitle:SetText("Reagents")
-    reagents.bags = Label(reagents, "GameFontNormalSmall", colors.muted)
-    reagents.bags:SetPoint("TOPRIGHT", -46, 0)
-    reagents.bags:SetText("Bags")
-    reagents.bank = Label(reagents, "GameFontNormalSmall", colors.muted)
-    reagents.bank:SetPoint("TOPRIGHT", -3, 0)
-    reagents.bank:SetText("Bank")
+    local bags = Label(reagents, "GameFontHighlightSmall", colors.muted)
+    bags:SetPoint("TOPRIGHT", -46, 0)
+    bags:SetText("Bags")
+    local bank = Label(reagents, "GameFontHighlightSmall", colors.muted)
+    bank:SetPoint("TOPRIGHT", -3, 0)
+    bank:SetText("Bank")
+
+    local lines = CreateFrame("Frame", nil, content)
+    window.lines = lines
+    lines:SetPoint("TOPLEFT", window.materials, "BOTTOMLEFT", 0, -8)
+    lines:SetPoint("TOPRIGHT", window.materials, "BOTTOMRIGHT", 0, -8)
+    lines:SetHeight(1)
+    lines.rows = {}
 
     local totals = CreateFrame("Frame", nil, detail)
     window.profitPanel = totals
     totals:SetPoint("BOTTOMLEFT", 12, 43)
     totals:SetPoint("BOTTOMRIGHT", -12, 43)
-    totals:SetHeight(94)
+    totals:SetHeight(93)
     local totalsBackground = totals:CreateTexture(nil, "BACKGROUND")
-    totalsBackground:SetPoint("TOPLEFT", -5, 2)
+    totalsBackground:SetPoint("TOPLEFT", -5, 4)
     totalsBackground:SetPoint("BOTTOMRIGHT", 5, -2)
     Fill(totalsBackground, colors.background)
     local function AmountRow(label, y, parent)
+        parent = parent or totals
         local title = Label(parent, "GameFontNormalSmall", colors.gold)
         title:SetPoint("TOPLEFT", 0, y)
         title:SetText(label)
@@ -1185,32 +1266,42 @@ local function BuildDetail()
         value:SetPoint("TOPLEFT", 156, y)
         return value, title
     end
-    window.cost = AmountRow("Buy for", -2, totals)
-    window.revenue = AmountRow("Sell to vendor for", -21, totals)
-    if addon.GetSetting then
-        window.auctionSale, window.auctionSaleLabel = AmountRow("Sell on auction for", -39, totals)
-        window.auctionValue, window.auctionLine = AmountRow("Auction profit after cut", -57, totals)
-    end
+    window.cost = AmountRow("Buy for", -2)
+    window.revenue = AmountRow("Sell to vendor for", -20)
     local hover = CreateFrame("Frame", nil, totals)
     window.profitHover = hover
-    hover:SetPoint("BOTTOMLEFT")
-    hover:SetPoint("BOTTOMRIGHT")
-    hover:SetHeight(19)
+    hover:SetPoint("TOPLEFT", 0, -38)
+    hover:SetPoint("TOPRIGHT", 0, -38)
+    hover:SetHeight(18)
     hover:EnableMouse(true)
     hover:SetScript("OnEnter", addon.ShowRoute)
     hover:SetScript("OnLeave", addon.HideRoute)
     hover:SetScript("OnHide", addon.HideRoute)
-    window.profitValue, window.profitLabel = AmountRow("Profit to vendor", -1, hover)
+    window.profitValue, window.profitLabel = AmountRow("Profit to vendor", 0, hover)
+    window.auctionSale, window.auctionSaleLabel = AmountRow("Sell on auction for", -56)
+    window.auctionValue, window.auctionLine = AmountRow("Auction profit after cut", -74)
 
     window.create = Button(detail, "Create", 88, function() Craft(false) end)
     window.create:SetPoint("BOTTOMRIGHT", -12, 9)
     window.createAll = Button(detail, "Create all", 112, function() Craft(true) end)
     window.createAll:SetPoint("BOTTOMLEFT", 12, 9)
-    window.searchPrices = Button(detail, "Refresh prices", 112, SearchPrices)
+    window.searchPrices = Button(detail, "Search prices", 112, SearchPrices)
     window.searchPrices:SetPoint("BOTTOMRIGHT", -12, 9)
+    window.buy = Button(detail, "Review purchases", 126, BuyMaterials)
+    window.buy:SetPoint("BOTTOMLEFT", 12, 9)
+    window.queueNext = Button(detail, "Craft next", 110, CraftNext)
+    window.queueNext:SetPoint("BOTTOMRIGHT", -12, 9)
+    window.addShopping = Button(detail, "Add to list", 88, function()
+        local info, schematic = SelectedRecipe()
+        if not info then return end
+        addon.AddToShopping(info.recipeID, Quantity(), schematic or GetSchematic(info))
+        SetMode("shopping")
+    end)
+    window.addShopping:SetPoint("BOTTOMRIGHT", totals, "TOPRIGHT", 0, 5)
+
     local qty = CreateFrame("EditBox", nil, detail, "InputBoxTemplate")
     window.quantity = qty
-    qty:SetSize(36, 24)
+    qty:SetSize(36, 22)
     qty:SetPoint("BOTTOM", 9, 9)
     qty:SetAutoFocus(false)
     qty:SetNumeric(true)
@@ -1220,51 +1311,31 @@ local function BuildDetail()
     qty:SetScript("OnEditFocusLost", function(self) self:SetText(tostring(Quantity())) end)
     qty:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
     qty:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    local less = Button(detail, "-", 21, function() qty:SetText(tostring(math.max(1, Quantity() - 1))) end)
-    less:SetPoint("RIGHT", qty, "LEFT", -4, 0)
-    local more = Button(detail, "+", 21, function() qty:SetText(tostring(math.min(999, Quantity() + 1))) end)
+    local less = Button(detail, "-", 22, function() qty:SetText(tostring(math.max(1, Quantity() - 1))) end)
+    less:SetPoint("RIGHT", qty, "LEFT", -8, 0)
+    local more = Button(detail, "+", 22, function() qty:SetText(tostring(math.min(999, Quantity() + 1))) end)
     more:SetPoint("LEFT", qty, "RIGHT", 4, 0)
     window.lessQuantity, window.moreQuantity = less, more
-    if addon.GetSetting then
-        window.addShopping = Button(detail, "Add to list", 82, function()
-            local info, schematic = SelectedRecipe()
-            if not info then return end
-            addon.AddToShopping(info.recipeID, Quantity(), schematic or GetSchematic(info))
-            SetMode("shopping")
-        end)
-        window.addShopping:SetPoint("BOTTOMRIGHT", -12, 142)
-        window.removeShopping = Button(detail, "Remove recipe", 112, function()
-            local info = SelectedRecipe()
-            if info then addon.GetWork().shopping[info.recipeID] = nil end
-            DrawDetail()
-        end)
-        window.removeShopping:SetPoint("BOTTOMLEFT", 12, 44)
-        window.manageShopping = Button(detail, "Manage list", 94, ManageShopping)
-        window.manageShopping:SetPoint("BOTTOMLEFT", 12, 9)
-        window.buy = Button(detail, "Review purchases", 126, BuyMaterials)
-        window.buy:SetPoint("BOTTOMRIGHT", -12, 44)
-        window.queueNext = Button(detail, "Craft next", 110, CraftNext)
-        window.queueNext:SetPoint("BOTTOMRIGHT", -12, 9)
-        window.draft = Button(detail, "Draft request", 108, function()
-            local info = SelectedRecipe()
-            local _, crafter = C_TradeSkillUI.IsTradeSkillLinked()
-            if not info or type(crafter) ~= "string" or crafter == "" or not crafter:match("^[^%s]+$") then return end
-            local text = ("Could you craft %d × %s for me? Please let me know the materials and your fee."):format(Quantity(), info.name)
-            ChatFrame_OpenChat("/w " .. crafter .. " " .. text)
-        end)
-        window.draft:SetPoint("BOTTOMRIGHT", -12, 9)
-    end
+end
+
+-- HideUIPanel is blocked for addons in combat, so hide the frame directly there.
+local function CloseProfession()
+    if InCombatLockdown() then native:Hide() else HideUIPanel(native) end
 end
 
 local function BuildWindow()
-    window = CreateFrame("Frame", "VendorProfitProfessionWindow", UIParent)
+    ApplySkin()
+    -- Blizzard's frame has its own title bar, so the content starts below it.
+    local top = blizzard and 22 or 0
+    window = CreateFrame("Frame", "VendorProfitProfessionWindow", UIParent, blizzard and "BasicFrameTemplateWithInset" or nil)
+    window.top = top
     window:Hide()
     window:SetSize(828, 620)
     window:SetFrameStrata("DIALOG")
     window:SetMovable(true)
     window:SetClampedToScreen(true)
     window:SetClampRectInsets(0, -34, 0, 0)
-    local position = VendorProfitSettings and VendorProfitSettings.position
+    local position = VendorProfitSettings.position
     if position then
         window:SetPoint(position.point, UIParent, position.relative, position.x, position.y)
     else
@@ -1273,29 +1344,32 @@ local function BuildWindow()
     local scale = math.min(1, (UIParent:GetWidth() - 62) / 828, (UIParent:GetHeight() - 22) / 620)
     window:SetScale(math.max(0.4, scale))
     window:EnableMouse(true)
-    Surface(window, "BACKGROUND", colors.background)
-    local title = Label(window, "GameFontNormalLarge", colors.accent)
-    window.title = title
-    title:SetPoint("TOPLEFT", 10, -11)
-    local close = Button(window, "X", 25, function() HideUIPanel(ProfessionsFrame) end)
-    close:SetPoint("TOPRIGHT", -8, -6)
-    local shop = Button(window, "Shopping list", 98, function() SetMode("shopping") end)
-    shop:SetPoint("RIGHT", close, "LEFT", -6, 0)
-    window.shop = shop
-    local link = Button(window, "Link", 44, LinkProfession)
-    link:SetPoint("RIGHT", shop, "LEFT", -6, 0)
-    local firstButton = link
-    if addon.GetSetting then
-        local tools = Button(window, "Tools", 58, OpenTools)
-        tools:SetPoint("RIGHT", link, "LEFT", -6, 0)
-        local settings = Button(window, "Settings", 70, addon.OpenSettings)
-        settings:SetPoint("RIGHT", tools, "LEFT", -6, 0)
-        firstButton = settings
+    local settings = Button(window, "Settings", 70, addon.OpenSettings)
+    if blizzard then
+        window.title = window.TitleText
+        window.CloseButton:SetScript("OnClick", CloseProfession)
+        settings:SetPoint("TOPRIGHT", -10, -7 - top)
+    else
+        Surface(window, "BACKGROUND", colors.background)
+        window.title = Label(window, "GameFontNormalLarge", colors.accent)
+        window.title:SetPoint("TOPLEFT", 10, -11)
+        local close = Button(window, "X", 25, CloseProfession)
+        close:SetPoint("TOPRIGHT", -8, -7)
+        settings:SetPoint("RIGHT", close, "LEFT", -6, 0)
     end
+    local tools = Button(window, "Tools", 58, OpenTools)
+    tools:SetPoint("RIGHT", settings, "LEFT", -6, 0)
+    local link = Button(window, "Link", 44, LinkProfession)
+    link:SetPoint("RIGHT", tools, "LEFT", -6, 0)
+
     local drag = CreateFrame("Frame", nil, window)
     drag:SetPoint("TOPLEFT")
-    drag:SetPoint("TOPRIGHT", firstButton, "TOPLEFT", -6, 6)
-    drag:SetHeight(34)
+    if blizzard then
+        drag:SetPoint("TOPRIGHT", -28, 0)
+    else
+        drag:SetPoint("TOPRIGHT", link, "TOPLEFT", -6, 7)
+    end
+    drag:SetHeight(blizzard and 22 or 34)
     drag:EnableMouse(true)
     drag:RegisterForDrag("LeftButton")
     drag:SetScript("OnDragStart", function() if not InCombatLockdown() then window:StartMoving() end end)
@@ -1304,9 +1378,22 @@ local function BuildWindow()
         local point, _, relative, x, y = window:GetPoint()
         VendorProfitSettings.position = { point = point, relative = relative, x = x, y = y }
     end)
+
+    -- The three views are tabs, so the current one is always visible. They sit above the drag area.
+    window.tabs = {}
+    local previous
+    for _, tab in ipairs({ { "recipes", "Recipes", 74 }, { "shopping", "Shopping list", 98 }, { "queue", "Queue", 64 } }) do
+        local key = tab[1]
+        local button = Button(window, tab[2], tab[3], function() SetMode(key) end)
+        if previous then button:SetPoint("LEFT", previous, "RIGHT", 4, 0) else button:SetPoint("TOPLEFT", blizzard and 10 or 150, -7 - top) end
+        button:SetFrameLevel(drag:GetFrameLevel() + 2)
+        window.tabs[key] = button
+        previous = button
+    end
+
     window.skill = CreateFrame("StatusBar", nil, window)
-    window.skill:SetPoint("TOPLEFT", 8, -39)
-    window.skill:SetPoint("TOPRIGHT", -8, -39)
+    window.skill:SetPoint("TOPLEFT", 8, -39 - top)
+    window.skill:SetPoint("TOPRIGHT", -8, -39 - top)
     window.skill:SetHeight(17)
     Surface(window.skill, "BACKGROUND", colors.group)
     window.skill:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
@@ -1314,14 +1401,14 @@ local function BuildWindow()
     window.skill.label = Label(window.skill, "GameFontHighlightSmall", colors.text)
     window.skill.label:SetPoint("CENTER")
     window.batchBand = CreateFrame("Frame", nil, window)
-    window.batchBand:SetPoint("TOPLEFT", 8, -62)
-    window.batchBand:SetPoint("TOPRIGHT", -8, -62)
+    window.batchBand:SetPoint("TOPLEFT", 8, -62 - top)
+    window.batchBand:SetPoint("TOPRIGHT", -8, -62 - top)
     window.batchBand:SetHeight(34)
     Surface(window.batchBand, "BACKGROUND", colors.banner)
     window.batch = Label(window.batchBand, "GameFontHighlight", colors.accent)
     window.batch:SetPoint("LEFT", 8, 0)
     window:SetScript("OnUpdate", function(self, elapsed)
-        if not craftingJob or not GetSetting("timer") then return end
+        if not craftingJob then return end
         self.batchElapsed = (self.batchElapsed or 0) + elapsed
         if self.batchElapsed >= 0.25 then
             self.batchElapsed = 0
@@ -1392,21 +1479,13 @@ Refresh = function()
     local child = C_TradeSkillUI.GetChildProfessionInfo and C_TradeSkillUI.GetChildProfessionInfo()
     rankInfo = child and (child.maxSkillLevel or 0) > 0 and child or info
     local skill, maximum = rankInfo.skillLevel or 0, rankInfo.maxSkillLevel or 0
-    if (mode == "shopping" and not GetSetting("shopping"))
-        or (mode == "queue" and not GetSetting("queue"))
-        or (mode == "skill" and not GetSetting("skillChances")) then mode = "recipes" end
-    if mode == "tools" then
-        local tool = window.tool or ""
-        if (tool:match("^alt:") and not GetSetting("altProfessions"))
-            or (tool:match("^reagent:") and not GetSetting("reagentUses"))
-            or ((tool == "deals" or tool == "disenchant") and not GetSetting("disenchant")) then
-            mode = "recipes"
-        end
+    if mode == "tools" and (window.tool or ""):match("^alt:") and not GetSetting("altProfessions") then
+        mode = "recipes"
     end
-    window.shop:SetShown(GetSetting("shopping"))
-    window.columnAH:SetShown(GetSetting("auctionProfit"))
+    local showAuction = GetSetting("auctionProfit")
+    window.columnAH:SetShown(showAuction)
     window.columnVendor:ClearAllPoints()
-    window.columnVendor:SetPoint("RIGHT", GetSetting("auctionProfit") and -137 or -68, 0)
+    window.columnVendor:SetPoint("RIGHT", showAuction and -131 or -57, 0)
     window.columnVendor:SetShown(GetSetting("vendorProfit"))
     window.title:SetText(info.professionName)
     window.skill:SetMinMaxValues(0, math.max(1, maximum))
@@ -1415,13 +1494,13 @@ Refresh = function()
     local batchText = BatchText()
     window.batchBand:SetShown(batchText ~= nil)
     window.batch:SetText(batchText or "")
-    local bodyY = batchText and -105 or -67
+    local bodyY = (batchText and -105 or -67) - window.top
     window.search:SetPoint("TOPLEFT", 8, bodyY)
     window.detail:SetPoint("TOPLEFT", listWidth + 16, bodyY)
     ReadRecipes()
     ListEntries()
     DrawDetail()
-    if not linked and GetSetting("altProfessions") and addon.RememberProfession then
+    if not linked and GetSetting("altProfessions") then
         addon.RememberProfession(professionID, info.professionName, skill, maximum, records)
     end
     window:Show()
@@ -1495,12 +1574,6 @@ end)
 
 SLASH_VENDORPROFITWINDOW1 = "/vendorprofit"
 SlashCmdList.VENDORPROFITWINDOW = function()
-    VendorProfitSettings = VendorProfitSettings or {}
-    if addon.SetSetting then
-        addon.SetSetting("window", not GetSetting("window"))
-    else
-        VendorProfitSettings.native = not VendorProfitSettings.native
-    end
-    print(VendorProfitSettings.native and "Vendor Profit: standard profession window." or "Vendor Profit: custom profession window.")
-    QueueRefresh()
+    addon.SetSetting("window", not GetSetting("window"))
+    print(GetSetting("window") and "Vendor Profit: custom profession window." or "Vendor Profit: standard profession window.")
 end

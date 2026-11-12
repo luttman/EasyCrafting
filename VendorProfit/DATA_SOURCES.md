@@ -7,3 +7,7 @@
 - The list of standard merchant reagents originates in LibPeriodicTable-3.1. [LibPeriodicTable-3.1](https://github.com/doadin/libperiodictable-3-1)
 
 Vendor Profit prefers live recipe data and reads optional location data through QuestieDB at runtime.
+
+## Bulk buying
+
+`BulkBuy.lua` is new code. The shift-click idea and the half-second purchase pace follow [Multi Buyer](https://github.com/rockschtar/MultiBuyer) (GPL-3.0), which is a rewrite of BuyEmAll.

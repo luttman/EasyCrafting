@@ -1,16 +1,6 @@
 local _, addon = ...
 
-local function SpellName(id)
-    return C_Spell.GetSpellName(id) or ("Recipe #" .. id)
-end
-
-local function ItemName(id)
-    return C_Item.GetItemNameByID(id) or ("Item #" .. id)
-end
-
-local function Money(value)
-    return GetMoneyString(math.floor(math.abs(value)), true)
-end
+local Money, ItemName, SpellName = addon.Money, addon.ItemName, addon.SpellName
 
 local mapIDs
 local function QuestieMap(area)
@@ -136,28 +126,9 @@ local function ReagentUses(id)
     return table.concat(rows, "\n")
 end
 
-local function DisenchantDeals()
-    local lines, offers = { "Estimated disenchant value less auction buyout", "" }, {}
-    local results = AuctionHouseFrame and AuctionHouseFrame:IsShown() and C_AuctionHouse.GetBrowseResults()
-    for _, row in ipairs(results or {}) do
-        local id = row.itemKey.itemID
-        local value = addon.DisenchantValue(id)
-        if value and row.minPrice > 0 and row.totalQuantity > 0 and value > row.minPrice then
-            offers[#offers + 1] = { id = id, profit = value - row.minPrice }
-        end
-    end
-    table.sort(offers, function(a, b) return a.profit > b.profit end)
-    for _, offer in ipairs(offers) do
-        lines[#lines + 1] = ItemName(offer.id) .. "  ·  +" .. Money(offer.profit)
-    end
-    if #offers == 0 then lines[#lines + 1] = "Browse equipment at the Auction House to compare listings." end
-    return table.concat(lines, "\n")
-end
-
 function addon.ToolText(key)
     local reagent = key and key:match("^reagent:(%d+)$")
     if reagent then return ReagentUses(tonumber(reagent)) end
-    if key == "deals" then return DisenchantDeals() end
     local guid, line = (key or ""):match("^alt:([^:]+):(%d+)$")
     if guid then
         local alt = VendorProfitSettings.alts[guid]
@@ -169,32 +140,18 @@ function addon.ToolText(key)
         return ("%s  ·  %s %d/%d\n\n%s"):format(alt.name, profession.name, profession.skill, profession.cap,
             table.concat(names, "\n"))
     end
-    if key == "disenchant" then
-        local lines = { "Estimated disenchant value of items in your bags", "" }
-        for bag = 0, NUM_BAG_SLOTS or 4 do
-            for slot = 1, C_Container.GetContainerNumSlots(bag) do
-                local id = C_Container.GetContainerItemID(bag, slot)
-                local value = addon.DisenchantValue(id)
-                if value then lines[#lines + 1] = ItemName(id) .. "  ·  " .. Money(value) end
-            end
-        end
-        if #lines == 2 then lines[#lines + 1] = "Auctionator has no disenchant estimate for your bag items." end
-        return table.concat(lines, "\n")
-    end
     return ""
 end
 
 function addon.ToolEntries(schematic)
     local entries = {}
-    if addon.GetSetting("reagentUses") then
-        local seen = {}
-        for _, slot in ipairs(schematic and schematic.reagentSlotSchematics or {}) do
-            for _, reagent in ipairs(slot.reagents) do
-                local id = reagent.itemID
-                if id and not seen[id] then
-                    seen[id] = true
-                    entries[#entries + 1] = { "reagent:" .. id, "Uses for " .. ItemName(id) }
-                end
+    local seen = {}
+    for _, slot in ipairs(schematic and schematic.reagentSlotSchematics or {}) do
+        for _, reagent in ipairs(slot.reagents) do
+            local id = reagent.itemID
+            if id and not seen[id] then
+                seen[id] = true
+                entries[#entries + 1] = { "reagent:" .. id, "Uses for " .. ItemName(id) }
             end
         end
     end
@@ -208,55 +165,5 @@ function addon.ToolEntries(schematic)
             end
         end
     end
-    if addon.GetSetting("disenchant") then
-        entries[#entries + 1] = { "disenchant", "Disenchant values in bags" }
-        entries[#entries + 1] = { "deals", "Auction House disenchant deals" }
-    end
     return entries
 end
-
-local reminder
-local trackingSpells = { 2383, 2580, 43308 }
-local function AvailableTracking()
-    local minimap = C_Minimap
-    if not (minimap and minimap.GetNumTrackingTypes and minimap.GetTrackingInfo) then return {} end
-    local choices = {}
-    for index = 1, minimap.GetNumTrackingTypes() do
-        local data = minimap.GetTrackingInfo(index)
-        for _, id in ipairs(trackingSpells) do
-            if data and data.name == C_Spell.GetSpellName(id) then
-                if data.active then return {} end
-                choices[#choices + 1] = { id = index, name = data.name }
-            end
-        end
-    end
-    return choices
-end
-
-function addon.UpdateGathering()
-    local choices = addon.GetSetting("gathering") and not InCombatLockdown() and AvailableTracking() or {}
-    if #choices == 0 then
-        if reminder then reminder:Hide() end
-        return
-    end
-    if not reminder then
-        reminder = CreateFrame("Button", nil, UIParent, "UIPanelButtonTemplate")
-        reminder:SetSize(146, 24)
-        reminder:SetPoint("CENTER", UIParent, "CENTER", 0, -135)
-        reminder:SetText("Track gathering")
-        reminder:SetScript("OnClick", function(self)
-            MenuUtil.CreateContextMenu(self, function(_, menu)
-                for _, choice in ipairs(AvailableTracking()) do
-                    local index = choice.id
-                    menu:CreateButton(choice.name, function() C_Minimap.SetTracking(index, true) end)
-                end
-            end)
-        end)
-    end
-    reminder:Show()
-end
-
-local events = CreateFrame("Frame")
-for _, event in ipairs({ "PLAYER_LOGIN", "MINIMAP_UPDATE_TRACKING", "PLAYER_REGEN_ENABLED",
-    "PLAYER_REGEN_DISABLED", "SPELLS_CHANGED" }) do events:RegisterEvent(event) end
-events:SetScript("OnEvent", addon.UpdateGathering)

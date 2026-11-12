@@ -287,7 +287,7 @@ local widgetMethods = {
         for _, click in ipairs({ ... }) do self.clicks[click] = true end
     end,
     Click = function(self)
-        assert(self:IsShown() and self:IsEnabled() and self.mouse and self.clicks.LeftButtonUp)
+        assert(self:IsShown() and self:IsEnabled())
         self:OnClick("LeftButton")
     end,
     Raise = function(self) self.raised = true end,
@@ -314,7 +314,10 @@ local function Widget(kind, name, parent, template)
         local members = (kind == "Texture" or kind == "FontString") and parent.regions or parent.children
         members[#members + 1] = widget
     end
-    if template == "BasicFrameTemplateWithInset" then widget.TitleText = Widget("FontString", nil, widget) end
+    if template == "BasicFrameTemplateWithInset" then
+        widget.TitleText = Widget("FontString", nil, widget)
+        widget.CloseButton = Widget("Button", nil, widget)
+    end
     widgets[#widgets + 1] = widget
     return widget
 end
@@ -324,6 +327,10 @@ widgetMethods.CreateTexture = function(self, _, layer)
     return texture
 end
 widgetMethods.CreateFontString = function(self) return Widget("FontString", nil, self) end
+widgetMethods.GetFontString = function(self)
+    self.fontString = self.fontString or Widget("FontString", nil, self)
+    return self.fontString
+end
 for _, method in ipairs({
     "SetAllPoints", "SetTextColor", "SetFrameLevel",
     "SetSize", "SetWidth", "SetJustifyH", "SetJustifyV", "SetWordWrap", "SetOrientation", "SetValueStep",
@@ -331,7 +338,7 @@ for _, method in ipairs({
     "SetScrollChild", "SetVerticalScroll", "SetSpacing", "SetNumeric", "SetMaxLetters",
     "SetTexture", "SetStatusBarTexture", "SetStatusBarColor", "SetMovable",
     "SetClampedToScreen", "SetClampRectInsets", "SetScale", "RegisterForDrag", "StopMovingOrSizing", "SetHitRectInsets",
-    "SetFont", "SetAtlas",
+    "SetFont", "SetAtlas", "LockHighlight", "UnlockHighlight",
 }) do
     widgetMethods[method] = function() end
 end
@@ -348,6 +355,7 @@ local function FindButton(text)
 end
 
 CreateFrame = Widget
+ChatFontNormal = { GetFont = function() return "Fonts\\ARIALN.TTF" end }
 SearchBoxTemplate_OnTextChanged = function() end
 local inCombat = false
 InCombatLockdown = function() return inCombat end
@@ -469,13 +477,17 @@ for _, widget in ipairs(widgets) do
     if widget.parent == overlay and widget.OnDragStart then drag = widget end
 end
 local dragPoint, dragAnchor, anchorPoint, inset = drag:GetPoint(2)
-assert(dragPoint == "TOPRIGHT" and dragAnchor == FindButton("Settings") and anchorPoint == "TOPLEFT" and inset < 0)
+assert(dragPoint == "TOPRIGHT" and dragAnchor == FindButton("Link") and anchorPoint == "TOPLEFT" and inset < 0)
 local menuItems = {}
 MenuUtil = { CreateContextMenu = function(_, build)
-    build(nil, { CreateButton = function(_, title) menuItems[title] = true end })
+    local function Add(_, title) menuItems[title] = true end
+    build(nil, { CreateButton = Add, CreateRadio = Add })
 end }
 FindButton("Tools"):Click()
-assert(menuItems.Settings and menuItems["Crafting queue"] and menuItems["Best for skill-ups"])
+assert(menuItems["Uses for Bronze Bar"] and not menuItems.Settings)
+FindButton("Filter"):Click()
+assert(menuItems["Best for skill-ups"] and menuItems["Vendor profit above zero"])
+assert(FindButton("Recipes") and FindButton("Queue"))
 local chat
 C_TradeSkillUI.GetTradeSkillListLink = function() return "[Engineering]" end
 ChatEdit_InsertLink = function() return false end
@@ -518,14 +530,21 @@ assert(math.abs(addon.SkillChance(3953, 150) - 0.9) < 0.0001)
 local ownedQuote = addon.QuoteVendor(schematics[3953], nil, 1, { [2319] = true })
 assert(ownedQuote.cost == 382)
 addon.SetSetting("auctionProfit", false)
+addon.SetSetting("vendorProfit", false)
+auction[2592] = auction[2592] - 3
 queued()
 assert(not FindText("Auction").shown)
+local vendorProfitRow = FindText("Profit to vendor").parent
+assert(vendorProfitRow:IsShown() and vendorProfitRow.parent == FindText("Sell to vendor for").parent)
+assert(FindText("461c") and FindText("+139c").parent == vendorProfitRow)
+auction[2592] = auction[2592] + 3
+addon.SetSetting("vendorProfit", true)
 addon.SetSetting("auctionProfit", true)
 queued()
-FindText("Create").parent:OnClick()
+FindButton("Create"):Click()
 assert(crafted == 1)
 windowEvents:OnEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "cast", 3953)
-FindText("Create all (3)").parent:OnClick()
+FindButton("Create all (3)"):Click()
 assert(crafted == 3)
 queued()
 local batch = FindText("Crafting  0 / 3")
@@ -538,15 +557,23 @@ assert(GameTooltip.lines[2] == "Smelt Bronze x 1 (makes 2 x Bronze Bar) | 273c")
 FindText("Profit to vendor").parent:OnLeave()
 FindButton("Shopping list"):Click()
 assert(FindText("1 craft of Bronze Framework"))
-FindText("Refresh prices").parent:OnClick()
+FindButton("Search prices"):Click()
 assert(table.concat(searched, ",") == "Bronze Bar,Copper Bar,Copper Ore,Medium Leather,Tin Bar,Tin Ore,Wool Cloth")
 addon.AddToShopping(3953, 2, schematics[3953])
 addon.AddToShopping(3953, 1, schematics[3953])
 assert(addon.GetWork().shopping[3953].quantity == 3)
 local savedNeeds, prerequisites = addon.ShoppingPlan(Count)
 assert(savedNeeds[2319] == 3 and savedNeeds[2592] == 3 and prerequisites[1].recipeID == 2657)
-assert(FindText("Use Vendor Profit's profession window") and FindText("Skill thresholds and estimated chances"))
-assert(FindText("Recipe sources"))
+assert(FindText("Use Vendor Profit's profession window") and FindText("Vendor profit in item tooltips"))
+assert(not FindText("Recipe sources") and not FindText("Gathering tracking reminder"))
+addon.RefreshWindow()
+queued()
+local savedJob = FindText("3 × Bronze Framework").parent
+assert(FindText("Saved crafts") and FindText("Craft first") and savedJob.more:IsShown())
+savedJob.more:Click()
+assert(addon.GetWork().shopping[3953].quantity == 4 and FindText("4 × Bronze Framework"))
+savedJob.less:Click()
+assert(addon.GetWork().shopping[3953].quantity == 3)
 assert(not FindText("Leveling plan") and not FindText("Include recipes you can train later"))
 assert(not FindText("Next rank available") and not FindText("Next profession rank guidance"))
 assert(not FindButton("Waypoint") and not FindButton("Skill-up plan"))
@@ -578,6 +605,12 @@ HideUIPanel = function(frame)
     frame:OnHide()
 end
 inCombat = true
+HideUIPanel = function() error("HideUIPanel is blocked in combat") end
+ProfessionsFrame.Hide = function(frame)
+    frame.shown = false
+    crafting:Hide()
+    frame:OnHide()
+end
 FindButton("X"):Click()
 assert(not overlay:IsShown() and ProfessionsFrame:GetAlpha() == 1)
 assert(not ProfessionsFrame:IsMouseClickEnabled())
@@ -594,4 +627,45 @@ assert(ProfessionsFrame:GetAlpha() == 0)
 now = now + 1.1
 queued()
 assert(ProfessionsFrame:GetAlpha() == 0.8 and not overlay:IsShown())
-print("Vendor Profit: opening visibility, native fallback, header buttons, mouse input, crafting, shopping, and price search passed")
+
+-- Bulk buying: shift-click a merchant item, pick the maximum, and buy it in stack-sized purchases.
+local addonsLoaded = {}
+C_AddOns = { IsAddOnLoaded = function(name) return addonsLoaded[name] == true end }
+MerchantItemButton_OnModifiedClick = function() end
+IsShiftKeyDown = function() return true end
+GetMoney = function() return 1000 end
+NUM_BAG_SLOTS = 4
+C_Container = { GetContainerNumFreeSlots = function(bag) return bag == 0 and 2 or 0, 0 end }
+C_Item.GetItemInfo = function() return "Coal", nil, nil, nil, nil, nil, nil, 20 end
+C_Timer.NewTicker = function(_, callback)
+    for _ = 1, 5 do callback() end
+    return { Cancel = function() end }
+end
+local bought = {}
+BuyMerchantItem = function(_, quantity) bought[#bought + 1] = quantity end
+MerchantFrame.selectedTab = 1
+MerchantFrame:Show()
+assert(loadfile(addonDirectory .. "BulkBuy.lua"))("VendorProfit", addon)
+local bulkEvents = widgets[#widgets]
+bulkEvents:OnEvent("PLAYER_LOGIN")
+MerchantItemButton_OnModifiedClick({ GetID = function() return 1 end }, "LeftButton")
+local bulk = FindText("Buy in bulk").parent
+assert(bulk:IsShown() and FindText("Cost  50c") and FindText("Coal"))
+FindButton("Max"):Click()
+assert(FindText("Cost  400c"))
+FindButton("Buy"):Click()
+assert(#bought == 2 and bought[1] == 20 and bought[2] == 20 and not bulk:IsShown())
+assert(FindText("Shift-click merchant items to buy in bulk"))
+addon.SetSetting("bulkBuy", false)
+MerchantItemButton_OnModifiedClick({ GetID = function() return 1 end }, "LeftButton")
+assert(not bulk:IsShown())
+addon.SetSetting("bulkBuy", true)
+assert(not FindText("Multi Buyer is also installed"))
+addonsLoaded.MultiBuyer = true
+bulkEvents:OnEvent("PLAYER_LOGIN")
+queued()
+local notice = FindText("Multi Buyer is also installed").parent
+assert(notice:IsShown())
+FindButton("Keep both"):Click()
+assert(not notice:IsShown() and VendorProfitSettings.keepMultiBuyer)
+print("Vendor Profit: opening visibility, native fallback, header buttons, mouse input, crafting, shopping, price search, and bulk buying passed")

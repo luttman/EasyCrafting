@@ -1,6 +1,30 @@
 local addonName, addon = ...
 local basic = Enum.CraftingReagentType.Basic
 
+function addon.Money(value)
+    return GetMoneyString(math.floor(math.abs(value)), true)
+end
+
+function addon.ItemName(id)
+    return C_Item.GetItemNameByID(id) or ("Item #" .. id)
+end
+
+function addon.SpellName(id)
+    return C_Spell.GetSpellName(id) or ("Recipe #" .. id)
+end
+
+function addon.DirectReagents(schematic, batches)
+    local amounts = {}
+    for _, slot in ipairs(schematic and schematic.reagentSlotSchematics or {}) do
+        local reagent = slot.reagents[1]
+        if slot.reagentType == basic and reagent and reagent.itemID then
+            local id = reagent.itemID
+            amounts[id] = (amounts[id] or 0) + slot.quantityRequired * batches
+        end
+    end
+    return amounts
+end
+
 function addon.OfflineSchematic(id)
     local data = addon.RecipeData[id]
     if not data then return end
@@ -84,14 +108,7 @@ end
 function addon.AddToShopping(id, quantity, schematic)
     local shopping = addon.GetWork().shopping
     if not shopping[id] then
-        local inputs = {}
-        for _, slot in ipairs(schematic and schematic.reagentSlotSchematics or {}) do
-            local reagent = slot.reagents[1]
-            if slot.reagentType == basic and reagent and reagent.itemID then
-                local item = reagent.itemID
-                inputs[item] = (inputs[item] or 0) + slot.quantityRequired
-            end
-        end
+        local inputs = addon.DirectReagents(schematic, 1)
         if not next(inputs) then return end
         shopping[id] = { quantity = 0, reagents = inputs }
     end
@@ -159,9 +176,4 @@ function addon.MerchantOffers(needs)
         end
     end
     return offers
-end
-
-function addon.DisenchantValue(id)
-    local fn = Auctionator.API.v1.GetDisenchantPriceByItemID
-    return fn and id and fn(addonName, id)
 end
