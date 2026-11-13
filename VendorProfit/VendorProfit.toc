@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Vendor Profit
 ## Notes: Profession window, vendor profit, material shopping lists, and bulk buying at merchants.
-## Version: 1.7.0
+## Version: 1.8.0
 ## Dependencies: Auctionator
 ## OptionalDeps: QuestieDB
 ## SavedVariablesPerCharacter: VendorProfitRecipes, VendorProfitWork

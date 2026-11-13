@@ -647,6 +647,23 @@ assert(reordered[1].id == 15863 and reordered[2].id == 3953)
 addon.MoveJob(3953, -1)
 _, _, reordered = addon.ShoppingPlan(Count)
 assert(reordered[1].id == 3953)
+-- The first craft in the queue is Smelt Bronze, a Mining recipe, while Engineering is open.
+-- Craft next opens Mining, and the window stays on the queue when the profession changes.
+local openedLine
+C_TradeSkillUI.OpenTradeSkill = function(line) openedLine = line end
+FindButton("Craft next"):Click()
+assert(openedLine == 186)
+local engineering = C_TradeSkillUI.GetBaseProfessionInfo
+C_TradeSkillUI.GetBaseProfessionInfo = function()
+    return { professionID = 186, professionName = "Mining", skillLevel = 100, maxSkillLevel = 150 }
+end
+addon.RefreshWindow()
+queued()
+assert(FindText("Mining 100/150") and FindButton("Craft next"):IsShown())
+C_TradeSkillUI.GetBaseProfessionInfo = engineering
+addon.RefreshWindow()
+queued()
+FindButton("Queue"):Click()
 FindText("× Recipe #15863").parent.remove:Click()
 assert(addon.GetWork().shopping[15863] == nil and addon.GetWork().shopping[3953].quantity == 3)
 FindButton("Shopping list"):Click()

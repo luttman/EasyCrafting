@@ -4,7 +4,7 @@ local pending, failed
 local records, entries, rows = {}, {}, {}
 local collapsed = {}
 local mode, filter, offset = "recipes", "all", 0
-local professionID
+local professionID, stayInQueue
 local Refresh, DrawRows, DrawDetail
 local savedAlpha, dockedTab, openingUntil
 local nativeMouse = {}
@@ -437,6 +437,7 @@ end
 
 local function SetMode(value)
     mode = value
+    stayInQueue = nil
     offset = 0
     window.rightScroll:SetVerticalScroll(0)
     Refresh()
@@ -1170,8 +1171,21 @@ local function CraftNext()
         nextJob = window.jobs[1]
     end
     if not nextJob then return end
+    -- A craft from another profession opens that profession. Crafting needs a click of its own,
+    -- so the queue stays open for the next click on Craft next.
+    local data = addon.RecipeData[nextJob.id]
+    if data and data.line ~= professionID then
+        if C_TradeSkillUI.OpenTradeSkill then
+            stayInQueue = true
+            C_TradeSkillUI.OpenTradeSkill(data.line)
+            print("Vendor Profit: opening the profession for " .. SpellName(nextJob.id) .. ". Click Craft next again.")
+        else
+            print("Vendor Profit: open the profession for " .. SpellName(nextJob.id) .. ".")
+        end
+        return
+    end
     local info = C_TradeSkillUI.GetRecipeInfo(nextJob.id)
-    if not info or not info.learned or (C_TradeSkillUI.IsRecipeInSkillLine
+    if not info or not info.learned or (not data and C_TradeSkillUI.IsRecipeInSkillLine
         and not C_TradeSkillUI.IsRecipeInSkillLine(nextJob.id, professionID)) then
         print("Vendor Profit: open the profession for " .. SpellName(nextJob.id) .. ".")
         return
@@ -1676,7 +1690,8 @@ Refresh = function()
     if professionID ~= info.professionID then
         professionID = info.professionID
         window.preview = nil
-        mode, filter, offset = "recipes", "all", 0
+        mode, filter, offset = stayInQueue and "queue" or "recipes", "all", 0
+        stayInQueue = nil
         collapsed = {}
         window.search:SetText("")
     end
