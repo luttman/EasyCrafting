@@ -1,11 +1,8 @@
 -- Shift-click a merchant item to buy many at once. The idea comes from Multi Buyer and BuyEmAll.
 local _, addon = ...
-local dialog, confirm, offer, ticker, hooked
+local dialog, confirm, offer, hooked
 
-local function MerchantItemID(index)
-    local link = GetMerchantItemLink(index)
-    return (GetMerchantItemID and GetMerchantItemID(index)) or (link and C_Item.GetItemInfoInstant(link))
-end
+local MerchantItemID = addon.MerchantItemID
 
 -- ponytail: only stackable items that cost plain money. Everything else keeps Blizzard's own
 -- shift-click. Free space counts empty slots in normal bags, not partial stacks or profession bags.
@@ -29,10 +26,7 @@ local function ReadOffer(index)
 end
 
 local function Stop()
-    if ticker then
-        ticker:Cancel()
-        ticker = nil
-    end
+    addon.StopBuying()
     if dialog then dialog:Hide() end
     if confirm then confirm:Hide() end
 end
@@ -49,26 +43,9 @@ local function SetAmount(value)
     dialog.amount:HighlightText()
 end
 
-local function Purchase(job, remaining)
+local function Purchase(job, amount)
     local perCall = math.min(job.stack, GetMerchantItemMaxStack(job.index) or job.stack)
-    perCall = math.max(job.pack, math.floor(perCall / job.pack) * job.pack)
-    local function Next()
-        -- Stop if the merchant closed or its list changed since the player confirmed.
-        if remaining > 0 and MerchantFrame:IsShown() and MerchantItemID(job.index) == job.id then
-            local count = math.min(remaining, perCall)
-            BuyMerchantItem(job.index, count)
-            remaining = remaining - count
-        else
-            remaining = 0
-        end
-        if remaining <= 0 and ticker then
-            ticker:Cancel()
-            ticker = nil
-        end
-    end
-    Next()
-    -- ponytail: a fixed half second between purchases, the pace Multi Buyer uses to stay under the server throttle.
-    if remaining > 0 then ticker = C_Timer.NewTicker(0.5, Next) end
+    addon.BuyPaced(job.index, job.id, amount, math.max(job.pack, math.floor(perCall / job.pack) * job.pack))
 end
 
 -- Buy asks once more before it spends money, naming the item, the amount, and the cost.

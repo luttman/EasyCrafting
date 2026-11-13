@@ -202,21 +202,70 @@ local function MerchantOffer(index)
     end
 end
 
-function addon.MerchantOffers(needs)
+function addon.MerchantItemID(index)
+    local link = GetMerchantItemLink(index)
+    return (GetMerchantItemID and GetMerchantItemID(index)) or (link and C_Item.GetItemInfoInstant(link))
+end
+
+-- Purchases wait in one queue and go out one at a time.
+-- ponytail: a fixed half second between purchases, the pace Multi Buyer uses to stay under the server throttle.
+local purchases, ticker = {}, nil
+
+function addon.StopBuying()
+    purchases = {}
+    if ticker then
+        ticker:Cancel()
+        ticker = nil
+    end
+end
+
+local function BuyNext()
+    local step = table.remove(purchases, 1)
+    -- Stop if the merchant closed or its list changed since the player confirmed.
+    if step and MerchantFrame:IsShown() and addon.MerchantItemID(step.index) == step.id then
+        BuyMerchantItem(step.index, step.count)
+    else
+        purchases = {}
+    end
+    if #purchases == 0 and ticker then
+        ticker:Cancel()
+        ticker = nil
+    end
+end
+
+-- Buys `quantity` of a merchant item, at most `perCall` in each purchase.
+function addon.BuyPaced(index, id, quantity, perCall)
+    local idle = #purchases == 0
+    while quantity > 0 do
+        local count = math.min(quantity, perCall)
+        purchases[#purchases + 1] = { index = index, id = id, count = count }
+        quantity = quantity - count
+    end
+    if not idle then return end
+    BuyNext()
+    if #purchases > 0 then
+        if ticker then ticker:Cancel() end
+        ticker = C_Timer.NewTicker(0.5, BuyNext)
+    end
+end
+
+-- What this merchant sells from `needs`. One purchase holds at most a stack, so an offer covers
+-- one stack unless `all` asks for the full amount, which is then bought in several purchases.
+function addon.MerchantOffers(needs, all)
     local offers = {}
     if not (MerchantFrame and MerchantFrame:IsShown()) then return offers end
     for index = 1, GetMerchantNumItems() do
-        local link = GetMerchantItemLink(index)
-        local id = (GetMerchantItemID and GetMerchantItemID(index)) or (link and C_Item.GetItemInfoInstant(link))
+        local id = addon.MerchantItemID(index)
         if id and needs[id] then
             local price, pack, stock, purchasable, extended = MerchantOffer(index)
             if purchasable and not extended and price and price > 0 and pack and pack > 0 then
                 local quantity = math.ceil(needs[id] / pack) * pack
                 local max = GetMerchantItemMaxStack(index)
-                if max and max > 0 then quantity = math.min(quantity, math.floor(max / pack) * pack) end
+                local perCall = max and max > 0 and math.max(pack, math.floor(max / pack) * pack) or pack
+                if not all then quantity = math.min(quantity, perCall) end
                 if stock and stock >= 0 then quantity = math.min(quantity, math.floor(stock / pack) * pack) end
                 if quantity > 0 then
-                    offers[#offers + 1] = { id = id, index = index, quantity = quantity,
+                    offers[#offers + 1] = { id = id, index = index, quantity = quantity, perCall = perCall,
                         total = price * quantity / pack }
                 end
             end

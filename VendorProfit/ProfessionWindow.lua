@@ -633,9 +633,17 @@ local function BatchProgress()
     return math.min(1, (job.done + current) / job.count)
 end
 
+-- A craft line shows what it makes: the product's icon, tooltip, and chat link. A recipe with
+-- no item, such as an enchant, keeps the spell's icon and tooltip.
+local function ProductIcon(recipeID, item)
+    return item and C_Item.GetItemIconByID(item) or C_Spell.GetSpellTexture(recipeID)
+end
+
 local function AddJobs(lines, jobs, movable)
     for index, job in ipairs(jobs) do
-        lines[#lines + 1] = { job = job.id, spellID = job.id, icon = C_Spell.GetSpellTexture(job.id),
+        local schematic = GetSchematic({ recipeID = job.id })
+        local item = schematic and schematic.outputItemID
+        lines[#lines + 1] = { job = job.id, spellID = job.id, itemID = item, icon = ProductIcon(job.id, item),
             text = ("%d × %s"):format(job.quantity, SpellName(job.id)),
             movable = movable, first = index == 1, last = index == #jobs }
     end
@@ -643,7 +651,8 @@ end
 
 local function AddCrafts(lines, steps, right)
     for _, step in ipairs(steps) do
-        lines[#lines + 1] = { spellID = step.recipeID, icon = C_Spell.GetSpellTexture(step.recipeID), right = right,
+        lines[#lines + 1] = { spellID = step.recipeID, itemID = step.itemID,
+            icon = ProductIcon(step.recipeID, step.itemID), right = right,
             text = ("%d × %s"):format(step.batches, step.recipeName or ItemName(step.itemID)) }
     end
 end
@@ -1094,7 +1103,9 @@ local function BuyMaterials()
         addon.SearchMaterials(needed)
         return
     end
-    local offers = addon.MerchantOffers(window.needs or {})
+    -- With shift, buy the full amount of each material; without it, at most one stack of each.
+    local all = IsShiftKeyDown()
+    local offers = addon.MerchantOffers(window.needs or {}, all)
     if #offers == 0 then
         print("Vendor Profit: this merchant has none of the materials on your list.")
         return
@@ -1114,7 +1125,7 @@ local function BuyMaterials()
             dialog:Hide()
             if not (MerchantFrame and MerchantFrame:IsShown()) then return end
             -- Buy only if the merchant still offers exactly what the dialog listed.
-            local current = addon.MerchantOffers(approved.needs)
+            local current = addon.MerchantOffers(approved.needs, approved.all)
             local same = #current == #approved.offers
             for index, offer in ipairs(current) do
                 local expected = approved.offers[index]
@@ -1126,7 +1137,9 @@ local function BuyMaterials()
             elseif GetMoney() < approved.total then
                 print("Vendor Profit: you don't have enough money for these materials.")
             else
-                for _, offer in ipairs(current) do BuyMerchantItem(offer.index, offer.quantity) end
+                for _, offer in ipairs(current) do
+                    addon.BuyPaced(offer.index, offer.id, offer.quantity, offer.perCall)
+                end
                 QueueRefresh()
             end
         end)
@@ -1141,7 +1154,7 @@ local function BuyMaterials()
     end
     lines[#lines + 1] = "\nTotal  " .. Money(total)
     dialog.list:SetText(table.concat(lines, "\n"))
-    dialog.approved = { needs = window.needs, offers = offers, total = total }
+    dialog.approved = { needs = window.needs, offers = offers, total = total, all = all }
     dialog:SetHeight(112 + #offers * 18)
     dialog:Show()
     dialog:Raise()
@@ -1428,6 +1441,14 @@ local function BuildDetail()
     window.searchPrices:SetPoint("BOTTOMRIGHT", -12, 9)
     window.buy = Button(detail, "Review purchases", 126, BuyMaterials)
     window.buy:SetPoint("BOTTOMLEFT", 12, 9)
+    window.buy:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Review purchases")
+        GameTooltip:AddLine("Lists what this merchant sells from your list, up to one stack of each.", 1, 1, 1, true)
+        GameTooltip:AddLine("Shift-click: the full amount of each material.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    window.buy:SetScript("OnLeave", addon.HideRoute)
     window.queueNext = Button(detail, "Craft next", 110, CraftNext)
     window.queueNext:SetPoint("BOTTOMRIGHT", -12, 9)
     window.addShopping = Button(detail, "Add to list", 88, function()

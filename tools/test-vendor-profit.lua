@@ -630,6 +630,7 @@ assert(not FindText("Recipe sources") and not FindText("Gathering tracking remin
 addon.RefreshWindow()
 queued()
 local savedJob = FindText("3 × Bronze Framework").parent
+assert(savedJob.entry.itemID == 4382)
 assert(FindText("Saved crafts") and FindText("Craft first") and savedJob.more:IsShown())
 savedJob.more:Click()
 assert(addon.GetWork().shopping[3953].quantity == 4 and FindText("4 × Bronze Framework"))
@@ -676,6 +677,22 @@ local confirm = FindText("Buy from this merchant").parent
 assert(confirm:IsShown() and FindText("5 x Item #2692") and FindText("Total  50c"))
 FindButton("Buy materials"):Click()
 assert(not confirm:IsShown() and #purchases == 1 and purchases[1] == "1:5")
+-- A normal click covers one stack of 20; a shift-click covers all 30, bought as 20 and then 10.
+C_Timer.NewTicker = function(_, callback)
+    for _ = 1, 5 do callback() end
+    return { Cancel = function() end }
+end
+addon.GetWork().shopping[15863].quantity = 31
+addon.RefreshWindow()
+queued()
+FindButton("Review purchases"):Click()
+assert(FindText("20 x Item #2692") and FindText("Total  200c"))
+IsShiftKeyDown = function() return true end
+FindButton("Review purchases"):Click()
+IsShiftKeyDown = function() return false end
+assert(FindText("30 x Item #2692") and FindText("Total  300c"))
+FindButton("Buy materials"):Click()
+assert(#purchases == 3 and purchases[2] == "1:20" and purchases[3] == "1:10")
 addon.GetWork().shopping[15863] = nil
 AuctionHouseFrame:Show()
 addon.RefreshWindow()
