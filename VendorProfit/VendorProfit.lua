@@ -9,12 +9,11 @@ local function MerchantPrice(itemID)
         or (addon.VendorPrices and addon.VendorPrices[itemID])
 end
 
+-- A reagent that merchants sell is always bought from a merchant, never on the Auction House.
 local function PurchasePrice(itemID)
-    local api = Auctionator.API.v1
     local vendor = MerchantPrice(itemID)
-    local auction = api.GetAuctionPriceByItemID(addonName, itemID)
-    if vendor and (not auction or vendor <= auction) then return vendor, "merchant" end
-    return auction, "AH"
+    if vendor then return vendor, "merchant" end
+    return Auctionator.API.v1.GetAuctionPriceByItemID(addonName, itemID), "AH"
 end
 
 local QuoteItem

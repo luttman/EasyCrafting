@@ -297,6 +297,8 @@ local widgetMethods = {
     SetAlpha = function(self, alpha) self.alpha = alpha end,
     GetAlpha = function(self) return self.alpha or 1 end,
     SetFrameStrata = function(self, strata) self.strata = strata end,
+    GetFrameStrata = function(self) return self.strata or "MEDIUM" end,
+    SetToplevel = function(self, value) self.toplevel = value end,
     SetColorTexture = function(self, ...) self.textureColor = { ... } end,
     SetIgnoreParentAlpha = function(self, value) self.ignoresAlpha = value end,
     IsIgnoringParentAlpha = function(self) return self.ignoresAlpha == true end,
@@ -498,7 +500,8 @@ assert(chat == "[Engineering]")
 FindButton("Settings"):Click()
 local title = FindText("Vendor Profit settings")
 assert(title and title.parent:IsShown() and title.parent.raised)
-assert(overlay.strata == "DIALOG" and title.parent.strata == "FULLSCREEN_DIALOG")
+assert(overlay.strata == "MEDIUM" and overlay.toplevel and overlay.raised)
+assert(title.parent.strata == "FULLSCREEN_DIALOG")
 local opaqueBackdrop
 for _, widget in ipairs(widgets) do
     if widget.parent == title.parent and widget.layer == "BACKGROUND" and widget.textureColor then
@@ -511,6 +514,7 @@ assert(carrionRow.count.text == "1 || |cffffa55011|r")
 assert(carrionRow.highlight.layer == "HIGHLIGHT" and carrionRow.highlight:GetAlpha() < 0.25)
 carrionRow:OnClick("LeftButton")
 assert(currentRecipe == 15863 and carrionRow.background:IsShown())
+assert(FindText("Merchant  36c"))
 assert(carrionRow.count.text == "1 || |cffffa55011|r")
 crafting:SelectRecipe(C_TradeSkillUI.GetRecipeInfo(3953))
 queued()
@@ -550,6 +554,10 @@ assert(crafted == 3)
 queued()
 local batch = FindText("Crafting  0 / 3")
 assert(batch and batch.parent:IsShown() and batch.parent.value == 0)
+UnitCastingInfo = function() return nil, nil, nil, now * 1000, (now + 40) * 1000 end
+windowEvents:OnEvent("UNIT_SPELLCAST_START", "player", "cast", 3953)
+queued()
+assert(FindText("2m 00s remaining"))
 windowEvents:OnEvent("UNIT_SPELLCAST_SUCCEEDED", "player", "cast", 3953)
 queued()
 assert(math.abs(batch.parent.value - 1 / 3) < 0.001)
@@ -571,6 +579,40 @@ iconHover:OnEnter()
 iconHover:Click()
 assert(shown == 3953 and linkedItem == "item-link-3953")
 iconHover:OnLeave()
+-- Each reagent shows the highest unit price that still breaks even: (revenue - other reagents) / amount.
+-- Materials cost 2 x 205 + 82 + 109 = 601; the vendor pays 600 and the Auction House 665 after its cut.
+local reagentRows = FindText("Bags").parent.children
+assert(reagentRows[1].limit.text == "Max  AH 237c  ·  Vendor 204c")
+assert(reagentRows[2].limit.text == "Max  AH 146c  ·  Vendor 81c")
+assert(reagentRows[3].limit.text == "Max  AH 173c  ·  Vendor 108c")
+assert(reagentRows[1].entry.lines[1][2] == "237c" and #reagentRows[1].entry.lines == 2)
+-- A reagent that merchants sell is never priced from the Auction House, even when that is cheaper.
+auction[2692] = 10
+local spicePrice, spiceSource = addon.PurchasePrice(2692)
+assert(spicePrice == 36 and spiceSource == "merchant")
+auction[2692] = 50
+-- Shift-clicking a reagent links it, and Search on AH looks up the recipe's reagents.
+local itemInfo = C_Item.GetItemInfo
+C_Item.GetItemInfo = function(id) return "name", "link-" .. id end
+FindText("Bags").parent.children[1]:OnMouseUp()
+C_Item.GetItemInfo = itemInfo
+assert(linkedItem == "link-2841")
+FindButton("Search on AH"):Click()
+assert(table.concat(searched, ",") == "Bronze Bar,Medium Leather,Wool Cloth")
+-- Max sets the amount to what the materials in your bags allow.
+IsShiftKeyDown = function() return false end
+FindButton("Max"):Click()
+local craftAmount
+for _, widget in ipairs(widgets) do
+    if widget.kind == "EditBox" and widget.parent == FindButton("Max").parent then craftAmount = widget end
+end
+assert(craftAmount.text == "3")
+-- With shift, Max counts by the most plentiful material: 4 Bronze Bars at 2 per craft, nothing else in bags.
+IsShiftKeyDown = function() return true end
+FindButton("Max"):Click()
+assert(craftAmount.text == "2")
+IsShiftKeyDown = function() return false end
+craftAmount:SetText("1")
 FindText("Profit to vendor").parent:OnEnter()
 assert(GameTooltip.lines[2] == "Smelt Bronze x 1 (makes 2 x Bronze Bar) | 273c")
 FindText("Profit to vendor").parent:OnLeave()
@@ -604,7 +646,8 @@ assert(reordered[1].id == 15863 and reordered[2].id == 3953)
 addon.MoveJob(3953, -1)
 _, _, reordered = addon.ShoppingPlan(Count)
 assert(reordered[1].id == 3953)
-addon.GetWork().shopping[15863] = nil
+FindText("× Recipe #15863").parent.remove:Click()
+assert(addon.GetWork().shopping[15863] == nil and addon.GetWork().shopping[3953].quantity == 3)
 FindButton("Shopping list"):Click()
 assert(not savedJob.up:IsShown())
 assert(not FindText("Leveling plan") and not FindText("Include recipes you can train later"))
@@ -708,9 +751,17 @@ for _, widget in ipairs(widgets) do
     if widget.kind == "EditBox" and widget.parent == bulk then amountBox = widget end
 end
 assert(amountBox.highlighted == "5")
-FindButton("Max"):Click()
+for _, widget in ipairs(widgets) do
+    if widget.kind == "Button" and widget.parent == bulk and widget.label and widget.label.text == "Max" then
+        widget:Click()
+    end
+end
 assert(FindText("Cost  400c"))
 FindButton("Buy"):Click()
+local question = FindText("Do you want to buy 40 x Coal for 400c?")
+assert(question and question.parent:IsShown() and #bought == 0 and not bulk:IsShown())
+FindButton("Buy now"):Click()
+assert(not question.parent:IsShown())
 assert(#bought == 2 and bought[1] == 20 and bought[2] == 20 and not bulk:IsShown())
 assert(FindText("Shift-click merchant items to buy in bulk"))
 addon.SetSetting("bulkBuy", false)
@@ -725,4 +776,13 @@ local notice = FindText("Multi Buyer is also installed").parent
 assert(notice:IsShown())
 FindButton("Keep both"):Click()
 assert(not notice:IsShown() and VendorProfitSettings.keepMultiBuyer)
+if EllesmereUI then
+    -- A new EllesmereUI accent repaints what is already on screen.
+    EllesmereUI.accentChanged(1, 0, 0.5)
+    local thumb
+    for _, widget in ipairs(widgets) do
+        if widget.kind == "Slider" then thumb = widget.regions[1].textureColor end
+    end
+    assert(thumb[1] == 1 and thumb[2] == 0 and thumb[3] == 0.5)
+end
 print("Vendor Profit: opening visibility, native fallback, header buttons, mouse input, crafting, shopping, price search, and bulk buying passed")

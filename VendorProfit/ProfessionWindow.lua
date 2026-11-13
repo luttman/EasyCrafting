@@ -38,6 +38,14 @@ local difficultyColors = {
 local fontSizes = { GameFontNormalLarge = 16, GameFontHighlight = 13, GameFontNormal = 13 }
 local blizzard, fontFile, fontFlags
 
+-- Everything drawn in the accent color goes through Paint, so it can be redrawn when
+-- EllesmereUI's accent changes.
+local repaint = {}
+local function Paint(apply)
+    repaint[#repaint + 1] = apply
+    apply()
+end
+
 -- Three looks share one layout: Blizzard templates, EllesmereUI's theme, or the built-in flat theme.
 -- ponytail: the skin is read once when the window is built, so a change needs /reload.
 local function ApplySkin()
@@ -64,6 +72,17 @@ local function ApplySkin()
             selected = { r * 0.3, g * 0.3, b * 0.3 }, banner = { 0.14, 0.14, 0.14 },
             accent = { r, g, b }, bar = { r, g, b }, text = { 1, 1, 1 }, muted = { 0.6, 0.6, 0.6 },
         }
+        if EllesmereUI.RegAccent then
+            EllesmereUI.RegAccent({ type = "callback", fn = function(red, green, blue)
+                for _, key in ipairs({ "accent", "bar" }) do
+                    colors[key][1], colors[key][2], colors[key][3] = red, green, blue
+                end
+                colors.selected[1], colors.selected[2], colors.selected[3] = red * 0.3, green * 0.3, blue * 0.3
+                for _, apply in ipairs(repaint) do apply() end
+                -- The recipe rows and the tabs take their colors when they are drawn.
+                addon.RefreshWindow()
+            end })
+        end
     else
         -- The chat font is Arial Narrow on Latin clients and a font with the right glyphs elsewhere.
         fontFile, fontFlags = ChatFontNormal:GetFont(), ""
@@ -115,7 +134,7 @@ local function Button(parent, text, width, action)
     Fill(button.inner, colors.button)
     local hover = button:CreateTexture(nil, "HIGHLIGHT")
     hover:SetAllPoints(button.inner)
-    Fill(hover, colors.accent)
+    Paint(function() Fill(hover, colors.accent) end)
     hover:SetAlpha(0.12)
     button.label = Label(button, "GameFontNormalSmall", colors.text)
     button.label:SetPoint("CENTER")
@@ -151,6 +170,7 @@ local function Window(name, width, height, title)
         backdrop:SetAllPoints()
         backdrop:SetColorTexture(colors.background[1], colors.background[2], colors.background[3], 1)
         frame.title = Label(frame, "GameFontNormalLarge", colors.accent)
+        Paint(function() TextColor(frame.title, colors.accent) end)
         frame.title:SetPoint("TOPLEFT", 10, -11)
         local close = Button(frame, "X", 25, function() frame:Hide() end)
         close:SetPoint("TOPRIGHT", -8, -7)
@@ -300,7 +320,9 @@ local function BatchText()
     if craftingJob.duration and craftingJob.ends then
         local seconds = math.max(0, craftingJob.ends - GetTime())
             + math.max(0, craftingJob.count - craftingJob.done - 1) * craftingJob.duration
-        text = text .. ("  ·  %ds remaining"):format(math.ceil(seconds))
+        seconds = math.ceil(seconds)
+        local time = seconds >= 60 and ("%dm %02ds"):format(math.floor(seconds / 60), seconds % 60) or (seconds .. "s")
+        text = text .. "  ·  " .. time .. " remaining"
     end
     return text
 end
@@ -464,6 +486,7 @@ local function NewRow(index)
     row:SetPoint("TOPRIGHT", -12, -(index - 1) * rowHeight)
     row.background = Surface(row, "BACKGROUND", colors.group)
     row.highlight = Surface(row, "HIGHLIGHT", colors.accent)
+    Paint(function() Fill(row.highlight, colors.accent) end)
     row.highlight:SetAlpha(0.16)
     row.count = Label(row, "GameFontHighlightSmall", colors.text)
     row.count:SetJustifyH("RIGHT")
@@ -693,7 +716,17 @@ local function ItemTooltip(self)
     if not (entry.itemID or entry.spellID) then return end
     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
     if entry.itemID then GameTooltip:SetItemByID(entry.itemID) else GameTooltip:SetSpellByID(entry.spellID) end
+    for _, line in ipairs(entry.lines or {}) do
+        GameTooltip:AddDoubleLine(line[1], line[2], 1, 0.82, 0, 1, 1, 1)
+    end
     GameTooltip:Show()
+end
+
+-- Shift-click a material to link it in chat, like any other item in the game.
+local function LinkItem(self)
+    local id = self.entry.itemID
+    local link = id and select(2, C_Item.GetItemInfo(id))
+    if link then HandleModifiedItemClick(link) end
 end
 
 local function LineRow(panel, index)
@@ -703,6 +736,7 @@ local function LineRow(panel, index)
     row:SetHeight(lineHeight)
     row:EnableMouse(true)
     row:SetScript("OnEnter", ItemTooltip)
+    row:SetScript("OnMouseUp", LinkItem)
     row:SetScript("OnLeave", addon.HideRoute)
     row:SetScript("OnHide", addon.HideRoute)
     row.icon = row:CreateTexture(nil, "ARTWORK")
@@ -711,8 +745,10 @@ local function LineRow(panel, index)
     row.label = Label(row, "GameFontHighlight", colors.text)
     row.right = Label(row, "GameFontHighlightSmall", colors.muted)
     row.right:SetPoint("RIGHT", -3, 0)
+    row.remove = Button(row, "X", 22, function() ChangeJob(row.entry.job, -999) end)
+    row.remove:SetPoint("RIGHT", -3, 0)
     row.more = Button(row, "+", 22, function() ChangeJob(row.entry.job, 1) end)
-    row.more:SetPoint("RIGHT", -3, 0)
+    row.more:SetPoint("RIGHT", row.remove, "LEFT", -8, 0)
     row.less = Button(row, "-", 22, function() ChangeJob(row.entry.job, -1) end)
     row.less:SetPoint("RIGHT", row.more, "LEFT", -2, 0)
     local function MoveButton(direction, texture, anchor, gap)
@@ -747,6 +783,7 @@ local function DrawLines(lines)
         TextColor(row.label, entry.header and colors.gold or colors.text)
         row.right:SetText(entry.right or "")
         row.more:SetShown(entry.job ~= nil)
+        row.remove:SetShown(entry.job ~= nil)
         row.less:SetShown(entry.job ~= nil)
         row.up:SetShown(entry.movable == true)
         row.down:SetShown(entry.movable == true)
@@ -805,6 +842,7 @@ local function ReagentRow(panel, index)
     row:SetHeight(36)
     row:EnableMouse(true)
     row:SetScript("OnEnter", ItemTooltip)
+    row:SetScript("OnMouseUp", LinkItem)
     row:SetScript("OnLeave", addon.HideRoute)
     row:SetScript("OnHide", addon.HideRoute)
     row.check = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
@@ -824,6 +862,11 @@ local function ReagentRow(panel, index)
     row.bags:SetPoint("RIGHT", -46, 0)
     row.bank = Label(row, "GameFontHighlightSmall", colors.muted)
     row.bank:SetPoint("RIGHT", -3, 0)
+    row.limit = Label(row, "GameFontHighlightSmall", colors.muted)
+    row.limit:SetPoint("BOTTOMLEFT", row.icon, "BOTTOMRIGHT", 52, 0)
+    row.limit:SetPoint("RIGHT", row.bags, "LEFT", -8, 0)
+    row.limit:SetJustifyH("LEFT")
+    row.limit:SetWordWrap(false)
     return row
 end
 
@@ -833,6 +876,10 @@ local function DrawReagents(schematic)
     local ids = MaterialIDs(amounts)
     local owned = addon.GetWork().owned
     panel:SetShown(#ids > 0)
+    local _, vendorRevenue = addon.QuoteVendor(schematic)
+    local forVendor = GetSetting("vendorProfit") and addon.BreakEvenPrices(amounts, owned, vendorRevenue) or {}
+    local forAuction = GetSetting("auctionProfit")
+        and addon.BreakEvenPrices(amounts, owned, addon.AuctionRevenue(schematic)) or {}
     for index, id in ipairs(ids) do
         local row = panel.rows[index] or ReagentRow(panel, index)
         panel.rows[index] = row
@@ -845,6 +892,27 @@ local function DrawReagents(schematic)
         TextColor(row.required, have >= need and colors.text or colors.loss)
         row.check:SetShown(not linked)
         row.check:SetChecked(not owned[id])
+        -- A merchant reagent has a fixed price, so it shows that price. Any other reagent shows the
+        -- highest price worth paying; the tooltip spells out what AH and Vendor mean.
+        local merchant = addon.MerchantPrice(id)
+        local limits, lines = {}, {}
+        if merchant then
+            lines[1] = { "Sold by merchants for", Money(merchant) }
+        else
+            for _, limit in ipairs({
+                { "AH", forAuction[id], "Highest price to pay, if you sell the result on the Auction House" },
+                { "Vendor", forVendor[id], "Highest price to pay, if you sell the result to a vendor" },
+            }) do
+                if limit[2] then
+                    local price = limit[2] >= 1 and Money(limit[2]) or "-"
+                    limits[#limits + 1] = limit[1] .. " " .. price
+                    lines[#lines + 1] = { limit[3], price }
+                end
+            end
+        end
+        row.entry.lines = lines
+        row.limit:SetText(merchant and ("Merchant  " .. Money(merchant))
+            or #limits > 0 and "Max  " .. table.concat(limits, "  ·  ") or "")
         row.bags:SetText(have)
         row.bank:SetText(math.max(0, (C_Item.GetItemCount(id, true, false, true) or have) - have))
         row:Show()
@@ -927,6 +995,8 @@ DrawDetail = function()
     window.lessQuantity:SetShown(not (queue or tools))
     window.moreQuantity:SetShown(not (queue or tools))
     window.searchPrices:SetShown(shopping and AuctionHouseOpen())
+    window.searchRecipe:SetShown(not special and schematic ~= nil and AuctionHouseOpen())
+    window.maxQuantity:SetShown(not special and learned)
     window.buy:SetShown(shopping and (AuctionHouseOpen() or (MerchantFrame ~= nil and MerchantFrame:IsShown())))
     window.queueNext:SetShown(queue)
 
@@ -1193,7 +1263,7 @@ local function BuildList()
     slider:SetObeyStepOnDrag(true)
     local thumb = slider:CreateTexture(nil, "ARTWORK")
     thumb:SetSize(6, 24)
-    Fill(thumb, colors.bar)
+    Paint(function() Fill(thumb, colors.bar) end)
     slider:SetThumbTexture(thumb)
     slider:EnableMouse(true)
     slider:SetScript("OnValueChanged", function(self, value)
@@ -1385,6 +1455,34 @@ local function BuildDetail()
     local more = Button(detail, "+", 22, function() qty:SetText(tostring(math.min(999, Quantity() + 1))) end)
     more:SetPoint("LEFT", qty, "RIGHT", 4, 0)
     window.lessQuantity, window.moreQuantity = less, more
+    window.maxQuantity = Button(detail, "Max", 40, function()
+        local most = page:GetCraftableCount()
+        if IsShiftKeyDown() then
+            -- Count by the material you have the most of, for planning what to buy.
+            local info, schematic = SelectedRecipe()
+            most = 0
+            for id, amount in pairs(addon.DirectReagents(schematic or (info and GetSchematic(info)), 1)) do
+                most = math.max(most, math.floor(BagCount(id) / amount))
+            end
+        end
+        qty:SetText(tostring(math.max(1, math.min(999, most))))
+    end)
+    window.maxQuantity:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Max")
+        GameTooltip:AddLine("Sets the amount you can craft with the materials in your bags.", 1, 1, 1, true)
+        GameTooltip:AddLine("Shift-click: the amount your most plentiful material allows.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    window.maxQuantity:SetScript("OnLeave", addon.HideRoute)
+    window.maxQuantity:SetPoint("LEFT", more, "RIGHT", 4, 0)
+    -- Auctionator's own search button sits on the hidden native page, so the window has one too.
+    window.searchRecipe = Button(detail, "Search on AH", 100, function()
+        local info, schematic = SelectedRecipe()
+        schematic = schematic or (info and GetSchematic(info))
+        addon.SearchMaterials(addon.DirectReagents(schematic, Quantity()))
+    end)
+    window.searchRecipe:SetPoint("RIGHT", window.addShopping, "LEFT", -6, 0)
 end
 
 -- An addon can't hide the profession frame in combat. Hide only this window there, leave the
@@ -1406,7 +1504,10 @@ local function BuildWindow()
     window.top = top
     window:Hide()
     window:SetSize(828, 620)
-    window:SetFrameStrata("DIALOG")
+    -- Sit in the same layer as the profession frame it replaces, and come to the front as one
+    -- piece when clicked, like any other game window.
+    window:SetFrameStrata(native:GetFrameStrata())
+    window:SetToplevel(true)
     window:SetMovable(true)
     window:SetClampedToScreen(true)
     window:SetClampRectInsets(0, -34, 0, 0)
@@ -1427,6 +1528,7 @@ local function BuildWindow()
     else
         Surface(window, "BACKGROUND", colors.background)
         window.title = Label(window, "GameFontNormalLarge", colors.accent)
+        Paint(function() TextColor(window.title, colors.accent) end)
         window.title:SetPoint("TOPLEFT", 10, -11)
         local close = Button(window, "X", 25, CloseProfession)
         close:SetPoint("TOPRIGHT", -8, -7)
@@ -1472,13 +1574,13 @@ local function BuildWindow()
     window.skill:SetHeight(17)
     Surface(window.skill, "BACKGROUND", colors.group)
     window.skill:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-    window.skill:SetStatusBarColor(unpack(colors.bar))
+    Paint(function() window.skill:SetStatusBarColor(unpack(colors.bar)) end)
     window.skill.label = Label(window.skill, "GameFontHighlightSmall", colors.text)
     window.skill.label:SetPoint("CENTER")
     -- The band is a progress bar: its fill grows behind the text as the batch runs.
     window.batchBand = CreateFrame("StatusBar", nil, window)
     window.batchBand:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-    window.batchBand:SetStatusBarColor(colors.bar[1], colors.bar[2], colors.bar[3], 0.45)
+    Paint(function() window.batchBand:SetStatusBarColor(colors.bar[1], colors.bar[2], colors.bar[3], 0.45) end)
     window.batchBand:SetMinMaxValues(0, 1)
     window.batchBand:SetPoint("TOPLEFT", 8, -62 - top)
     window.batchBand:SetPoint("TOPRIGHT", -8, -62 - top)
@@ -1585,7 +1687,10 @@ Refresh = function()
     if not linked and GetSetting("altProfessions") then
         addon.RememberProfession(professionID, info.professionName, skill, maximum, records)
     end
-    window:Show()
+    if not window:IsShown() then
+        window:Show()
+        window:Raise()
+    end
     DockNativeTabs()
     HideNative()
     if not InCombatLockdown() then DisableNativeMouse(native) end

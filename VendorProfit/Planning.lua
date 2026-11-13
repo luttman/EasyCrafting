@@ -98,6 +98,24 @@ function addon.AuctionRevenue(schematic)
     if price and price > 0 then return math.floor(price * quantity * 0.95), price * quantity end
 end
 
+-- The highest unit price each reagent can have before one craft stops breaking even, with
+-- the other reagents at today's prices. `amounts` is per craft; materials in `owned` cost nothing.
+-- ponytail: prices every reagent as bought, not as crafted from cheaper parts.
+function addon.BreakEvenPrices(amounts, owned, revenue)
+    local costs, total, limits = {}, 0, {}
+    if not revenue then return limits end
+    for id, amount in pairs(amounts) do
+        local price = owned and owned[id] and 0 or addon.PurchasePrice(id)
+        if not price then return limits end
+        costs[id] = price * amount
+        total = total + costs[id]
+    end
+    for id, amount in pairs(amounts) do
+        limits[id] = (revenue - (total - costs[id])) / amount
+    end
+    return limits
+end
+
 function addon.GetWork()
     VendorProfitWork = VendorProfitWork or {}
     VendorProfitWork.shopping = VendorProfitWork.shopping or {}

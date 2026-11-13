@@ -1,6 +1,6 @@
 -- Shift-click a merchant item to buy many at once. The idea comes from Multi Buyer and BuyEmAll.
 local _, addon = ...
-local dialog, offer, ticker, hooked
+local dialog, confirm, offer, ticker, hooked
 
 local function MerchantItemID(index)
     local link = GetMerchantItemLink(index)
@@ -34,6 +34,7 @@ local function Stop()
         ticker = nil
     end
     if dialog then dialog:Hide() end
+    if confirm then confirm:Hide() end
 end
 
 -- The amount is always a whole number of the merchant's packs, between one pack and the limit.
@@ -48,9 +49,7 @@ local function SetAmount(value)
     dialog.amount:HighlightText()
 end
 
-local function Buy()
-    local job, remaining = offer, Amount()
-    Stop()
+local function Purchase(job, remaining)
     local perCall = math.min(job.stack, GetMerchantItemMaxStack(job.index) or job.stack)
     perCall = math.max(job.pack, math.floor(perCall / job.pack) * job.pack)
     local function Next()
@@ -70,6 +69,33 @@ local function Buy()
     Next()
     -- ponytail: a fixed half second between purchases, the pace Multi Buyer uses to stay under the server throttle.
     if remaining > 0 then ticker = C_Timer.NewTicker(0.5, Next) end
+end
+
+-- Buy asks once more before it spends money, naming the item, the amount, and the cost.
+local function Buy()
+    local job, amount = offer, Amount()
+    Stop()
+    if not confirm then
+        local skin = addon.Skin
+        confirm = skin.Window("VendorProfitBulkConfirm", 340, 132, "Confirm purchase")
+        confirm.question = skin.Label(confirm, "GameFontHighlight", skin.colors.text)
+        confirm.question:SetPoint("TOPLEFT", 14, -46)
+        confirm.question:SetPoint("RIGHT", -14, 0)
+        confirm.question:SetJustifyH("LEFT")
+        confirm.question:SetSpacing(4)
+        local yes = skin.Button(confirm, "Buy now", 100, function()
+            confirm:Hide()
+            Purchase(confirm.job, confirm.amount)
+        end)
+        yes:SetPoint("BOTTOMRIGHT", -14, 12)
+        local no = skin.Button(confirm, "Cancel", 90, function() confirm:Hide() end)
+        no:SetPoint("RIGHT", yes, "LEFT", -6, 0)
+    end
+    confirm.job, confirm.amount = job, amount
+    confirm.question:SetText(("Do you want to buy %d x %s for %s?"):format(
+        amount, job.name, addon.Money(amount / job.pack * job.price)))
+    confirm:Show()
+    confirm:Raise()
 end
 
 local function Build()
