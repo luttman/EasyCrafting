@@ -402,6 +402,15 @@ local function ListEntries()
                 PriceRecord(record)
                 show = record.profit and record.profit > 0
             end
+            if filter == "materials" and info.learned then
+                -- Only the main materials count. Reagents that a merchant sells are ignored, because
+                -- they are always a short trip away; a recipe made only of those is listed too.
+                if record.hasMain == nil then
+                    local _, afterMerchant = addon.CraftCounts(GetSchematic(info), BagCount)
+                    record.hasMain = afterMerchant == nil or afterMerchant > 0
+                end
+                show = record.hasMain
+            end
             if mode == "skill" then
                 PriceRecord(record)
                 show = true
@@ -579,7 +588,10 @@ DrawRows = function()
             row:Hide()
         end
     end
-    local iconX = countWidth > 0 and math.min(72, math.max(26, math.ceil(countWidth) + 10)) or 9
+    -- Keep room for the craft counts even when no visible recipe has one, so the icons
+    -- stay in one column while the list scrolls.
+    local iconX = GetSetting("craftCounts") and not linked
+        and math.min(72, math.max(26, math.ceil(countWidth) + 10)) or 9
     for index = 1, math.min(visible, #rows) do
         local row = rows[index]
         if row:IsShown() then
@@ -701,13 +713,25 @@ local function QueueLines()
     local lines = {}
     local needs, prerequisites, jobs = addon.ShoppingPlan(BagCount)
     window.needs, window.prerequisites, window.jobs = needs, prerequisites, jobs
-    if #jobs == 0 then return "Add a recipe to the shopping list to queue it.", lines end
-    AddCrafts(lines, prerequisites, "Reagent")
-    AddJobs(lines, jobs, true)
     local notes = {}
-    if next(needs) then notes[#notes + 1] = "Open the shopping list to see missing materials." end
+    if #jobs == 0 then
+        notes[1] = "Add a recipe to the shopping list to queue it."
+    else
+        AddCrafts(lines, prerequisites, "Reagent")
+        AddJobs(lines, jobs, true)
+        if next(needs) then notes[1] = "Open the shopping list to see missing materials." end
+    end
     if craftingJob then
         notes[#notes + 1] = ("Crafting %d of %d complete"):format(craftingJob.done, craftingJob.count)
+    end
+    -- What you crafted stays listed until you sell it at a merchant or remove it here.
+    local crafted = MaterialIDs(addon.GetWork().crafted)
+    if #crafted > 0 then lines[#lines + 1] = { header = "Crafted" } end
+    for _, id in ipairs(crafted) do
+        local count, price = BagCount(id), select(11, C_Item.GetItemInfo(id)) or 0
+        lines[#lines + 1] = { itemID = id, crafted = id, icon = C_Item.GetItemIconByID(id),
+            text = ("%d x %s"):format(count, ItemName(id)),
+            right = price > 0 and Money(price * count) or "No vendor value" }
     end
     return table.concat(notes, "\n"), lines
 end
@@ -755,7 +779,11 @@ local function LineRow(panel, index)
     row.label = Label(row, "GameFontHighlight", colors.text)
     row.right = Label(row, "GameFontHighlightSmall", colors.muted)
     row.right:SetPoint("RIGHT", -3, 0)
-    row.remove = Button(row, "X", 22, function() ChangeJob(row.entry.job, -999) end)
+    row.remove = Button(row, "X", 22, function()
+        if row.entry.job then return ChangeJob(row.entry.job, -999) end
+        addon.GetWork().crafted[row.entry.crafted] = nil
+        DrawDetail()
+    end)
     row.remove:SetPoint("RIGHT", -3, 0)
     row.more = Button(row, "+", 22, function() ChangeJob(row.entry.job, 1) end)
     row.more:SetPoint("RIGHT", row.remove, "LEFT", -8, 0)
@@ -792,8 +820,10 @@ local function DrawLines(lines)
         row.label:SetText(entry.header or entry.text)
         TextColor(row.label, entry.header and colors.gold or colors.text)
         row.right:SetText(entry.right or "")
+        row.right:ClearAllPoints()
+        row.right:SetPoint("RIGHT", entry.crafted and -33 or -3, 0)
         row.more:SetShown(entry.job ~= nil)
-        row.remove:SetShown(entry.job ~= nil)
+        row.remove:SetShown(entry.job ~= nil or entry.crafted ~= nil)
         row.less:SetShown(entry.job ~= nil)
         row.up:SetShown(entry.movable == true)
         row.down:SetShown(entry.movable == true)
@@ -1009,6 +1039,8 @@ DrawDetail = function()
     window.maxQuantity:SetShown(not special and learned)
     window.buy:SetShown(shopping and (AuctionHouseOpen() or (MerchantFrame ~= nil and MerchantFrame:IsShown())))
     window.queueNext:SetShown(queue)
+    window.sell:SetShown(queue and MerchantFrame ~= nil and MerchantFrame:IsShown()
+        and next(addon.GetWork().crafted) ~= nil)
 
     local text, lines, reagentsHeight = "", {}, 0
     if shopping then
@@ -1161,6 +1193,62 @@ local function BuyMaterials()
     dialog:Raise()
 end
 
+-- Sells every stack of the items you crafted, after a dialog that lists them and the total.
+local function SellCrafts()
+    local function Totals()
+        local stacks, counts, values, total = addon.CraftedStacks(), {}, {}, 0
+        for _, stack in ipairs(stacks) do
+            counts[stack.id] = (counts[stack.id] or 0) + stack.count
+            values[stack.id] = (values[stack.id] or 0) + stack.value
+            total = total + stack.value
+        end
+        return stacks, counts, values, total
+    end
+    local stacks, counts, values, total = Totals()
+    if #stacks == 0 then
+        print("Vendor Profit: none of your crafted items are in your bags.")
+        return
+    end
+    local dialog = window.sellDialog
+    if not dialog then
+        dialog = Window("VendorProfitSellConfirm", 340, 120, "Sell to this merchant")
+        window.sellDialog = dialog
+        dialog.list = Label(dialog, "GameFontHighlight", colors.text)
+        dialog.list:SetPoint("TOPLEFT", 14, -44)
+        dialog.list:SetPoint("RIGHT", -14, 0)
+        dialog.list:SetJustifyH("LEFT")
+        dialog.list:SetSpacing(4)
+        local sell = Button(dialog, "Sell items", 100, function()
+            dialog:Hide()
+            if not (MerchantFrame and MerchantFrame:IsShown()) then return end
+            -- Sell only if the bags still hold what the dialog listed.
+            local current, _, _, value = Totals()
+            if value ~= dialog.total then
+                print("Vendor Profit: your bags changed. Open Sell crafts again.")
+                return
+            end
+            local crafted = addon.GetWork().crafted
+            for _, stack in ipairs(current) do
+                C_Container.UseContainerItem(stack.bag, stack.slot)
+                crafted[stack.id] = nil
+            end
+            QueueRefresh()
+        end)
+        sell:SetPoint("BOTTOMRIGHT", -14, 12)
+        local cancel = Button(dialog, "Cancel", 90, function() dialog:Hide() end)
+        cancel:SetPoint("RIGHT", sell, "LEFT", -6, 0)
+    end
+    local lines = {}
+    for _, id in ipairs(MaterialIDs(counts)) do
+        lines[#lines + 1] = ("%d x %s  |cff9eaab5%s|r"):format(counts[id], ItemName(id), Money(values[id]))
+    end
+    dialog.total = total
+    dialog.list:SetText(table.concat(lines, "\n") .. "\n\nTotal  " .. Money(total))
+    dialog:SetHeight(112 + #lines * 18)
+    dialog:Show()
+    dialog:Raise()
+end
+
 local function CraftNext()
     if linked or craftingJob or InCombatLockdown() or not Active(linked) then return end
     local nextJob
@@ -1221,6 +1309,7 @@ local function OpenFilter(button)
         for _, option in ipairs({
             { "all", "All recipes" }, { "learned", "Learned recipes" },
             { "favorites", "Favorites" }, { "profit", "Vendor profit above zero" },
+            { "materials", "Have Material" },
             { "skill", "Best for skill-ups" },
         }) do
             local key, label = unpack(option)
@@ -1465,6 +1554,8 @@ local function BuildDetail()
     window.buy:SetScript("OnLeave", addon.HideRoute)
     window.queueNext = Button(detail, "Craft next", 110, CraftNext)
     window.queueNext:SetPoint("BOTTOMRIGHT", -12, 9)
+    window.sell = Button(detail, "Sell crafts", 100, SellCrafts)
+    window.sell:SetPoint("BOTTOMLEFT", 12, 9)
     window.addShopping = Button(detail, "Add to list", 88, function()
         local info, schematic = SelectedRecipe()
         if not info then return end
@@ -1770,6 +1861,8 @@ events:SetScript("OnEvent", function(self, event, arg1, _, spellID)
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         if not craftingJob or craftingJob.id ~= spellID then return end
         craftingJob.done = craftingJob.done + 1
+        local made = GetSchematic({ recipeID = spellID })
+        if made and made.outputItemID then addon.GetWork().crafted[made.outputItemID] = true end
         if craftingJob.duration then craftingJob.ends = GetTime() + craftingJob.duration end
         local shopping = addon.GetWork().shopping
         local job = shopping[spellID]

@@ -483,13 +483,31 @@ local dragPoint, dragAnchor, anchorPoint, inset = drag:GetPoint(2)
 assert(dragPoint == "TOPRIGHT" and dragAnchor == FindButton("Link") and anchorPoint == "TOPLEFT" and inset < 0)
 local menuItems = {}
 MenuUtil = { CreateContextMenu = function(_, build)
-    local function Add(_, title) menuItems[title] = true end
+    local function Add(_, title, _, onSelect) menuItems[title] = onSelect or true end
     build(nil, { CreateButton = Add, CreateRadio = Add })
 end }
 FindButton("Tools"):Click()
 assert(menuItems["Uses for Bronze Bar"] and not menuItems.Settings)
 FindButton("Filter"):Click()
 assert(menuItems["Best for skill-ups"] and menuItems["Vendor profit above zero"])
+-- The bags hold the main material for Carrion Surprise but not the leather and cloth for Bronze
+-- Framework. Carrion Surprise also needs a merchant reagent, which the filter ignores.
+local function ListedRecipes()
+    local names = {}
+    for _, widget in ipairs(widgets) do
+        if widget.kind == "Button" and widget.count and widget:IsShown() and widget.entry.info then
+            names[widget.entry.info.name] = true
+        end
+    end
+    return names
+end
+assert(ListedRecipes()["Bronze Framework"] and ListedRecipes()["Carrion Surprise"])
+have[2692] = 0
+menuItems["Have Material"]()
+assert(ListedRecipes()["Carrion Surprise"] and not ListedRecipes()["Bronze Framework"])
+have[2692] = 1
+menuItems["All recipes"]()
+assert(ListedRecipes()["Bronze Framework"])
 assert(FindButton("Recipes") and FindButton("Queue"))
 local chat
 C_TradeSkillUI.GetTradeSkillListLink = function() return "[Engineering]" end
@@ -710,6 +728,26 @@ IsShiftKeyDown = function() return false end
 assert(FindText("30 x Item #2692") and FindText("Total  300c"))
 FindButton("Buy materials"):Click()
 assert(#purchases == 3 and purchases[2] == "1:20" and purchases[3] == "1:10")
+-- Crafting Bronze Framework earlier put its product, item 4382, on the crafted list. Sell crafts
+-- sells every stack of it in the bags and leaves other items alone.
+assert(addon.GetWork().crafted[4382])
+local bagSlots = { { itemID = 4382, stackCount = 3 }, { itemID = 2841, stackCount = 4 }, { itemID = 4382, stackCount = 1 } }
+local sold = {}
+C_Container = {
+    GetContainerNumSlots = function(bag) return bag == 0 and #bagSlots or 0 end,
+    GetContainerItemInfo = function(_, slot) return bagSlots[slot] end,
+    UseContainerItem = function(bag, slot) sold[#sold + 1] = bag .. ":" .. slot end,
+}
+have[4382] = 4
+FindButton("Queue"):Click()
+assert(FindText("Crafted") and FindText("4 x Item #4382"))
+FindButton("Sell crafts"):Click()
+local selling = FindText("Sell to this merchant").parent
+assert(selling:IsShown() and FindText("Total  2400c"))
+FindButton("Sell items"):Click()
+assert(table.concat(sold, ",") == "0:1,0:3" and not addon.GetWork().crafted[4382] and not selling:IsShown())
+have[4382] = nil
+FindButton("Shopping list"):Click()
 addon.GetWork().shopping[15863] = nil
 AuctionHouseFrame:Show()
 addon.RefreshWindow()

@@ -120,6 +120,7 @@ function addon.GetWork()
     VendorProfitWork = VendorProfitWork or {}
     VendorProfitWork.shopping = VendorProfitWork.shopping or {}
     VendorProfitWork.owned = VendorProfitWork.owned or {}
+    VendorProfitWork.crafted = VendorProfitWork.crafted or {}
     return VendorProfitWork
 end
 
@@ -200,6 +201,24 @@ local function MerchantOffer(index)
         local _, _, price, pack, stock, purchasable, _, extended = GetMerchantItemInfo(index)
         return price, pack, stock, purchasable, extended
     end
+end
+
+-- The stacks in your bags of items you crafted, with what a merchant pays for each.
+function addon.CraftedStacks()
+    local stacks, crafted = {}, addon.GetWork().crafted
+    for bag = 0, NUM_BAG_SLOTS or 4 do
+        for slot = 1, C_Container.GetContainerNumSlots(bag) do
+            local item = C_Container.GetContainerItemInfo(bag, slot)
+            if item and crafted[item.itemID] and not item.isLocked and not item.hasNoValue then
+                local price = select(11, C_Item.GetItemInfo(item.itemID)) or 0
+                if price > 0 then
+                    stacks[#stacks + 1] = { bag = bag, slot = slot, id = item.itemID,
+                        count = item.stackCount or 1, value = price * (item.stackCount or 1) }
+                end
+            end
+        end
+    end
+    return stacks
 end
 
 function addon.MerchantItemID(index)
