@@ -54,7 +54,7 @@ local function Buy()
     Stop()
     if not confirm then
         local skin = addon.Skin
-        confirm = skin.Window("VendorProfitBulkConfirm", 340, 132, "Confirm purchase")
+        confirm = skin.Window("EasyCraftingBulkConfirm", 340, 132, "Confirm purchase")
         confirm.question = skin.Label(confirm, "GameFontHighlight", skin.colors.text)
         confirm.question:SetPoint("TOPLEFT", 14, -46)
         confirm.question:SetPoint("RIGHT", -14, 0)
@@ -77,7 +77,7 @@ end
 
 local function Build()
     local skin = addon.Skin
-    dialog = skin.Window("VendorProfitBulkBuy", 270, 168, "Buy in bulk")
+    dialog = skin.Window("EasyCraftingBulkBuy", 270, 168, "Buy in bulk")
     dialog.item = skin.Label(dialog, "GameFontHighlight", skin.colors.text)
     dialog.item:SetPoint("TOPLEFT", 14, -44)
     dialog.item:SetPoint("RIGHT", -14, 0)
@@ -133,21 +133,21 @@ end
 
 local function ShowNotice()
     local skin = addon.Skin
-    local notice = skin.Window("VendorProfitMultiBuyerNotice", 400, 176, "Vendor Profit")
+    local notice = skin.Window("EasyCraftingMultiBuyerNotice", 400, 176, "Easy Crafting")
     local text = skin.Label(notice, "GameFontHighlight", skin.colors.text)
     text:SetPoint("TOPLEFT", 14, -44)
     text:SetPoint("RIGHT", -14, 0)
     text:SetJustifyH("LEFT")
     text:SetSpacing(3)
-    text:SetText("Multi Buyer is also installed. Vendor Profit now buys in bulk too, so you only need one of them.\n\n"
-        .. "While Multi Buyer is on, Vendor Profit leaves shift-click at merchants to it.")
+    text:SetText("Multi Buyer is also installed. Easy Crafting now buys in bulk too, so you only need one of them.\n\n"
+        .. "While Multi Buyer is on, Easy Crafting leaves shift-click at merchants to it.")
     local disable = skin.Button(notice, "Disable Multi Buyer and reload", 190, function()
         C_AddOns.DisableAddOn("MultiBuyer")
         ReloadUI()
     end)
     disable:SetPoint("BOTTOMRIGHT", -14, 12)
     local keep = skin.Button(notice, "Keep both", 90, function()
-        VendorProfitSettings.keepMultiBuyer = true
+        EasyCraftingSettings.keepMultiBuyer = true
         notice:Hide()
     end)
     keep:SetPoint("RIGHT", disable, "LEFT", -6, 0)
@@ -162,7 +162,7 @@ events:SetScript("OnEvent", function(_, event)
         Stop()
     elseif C_AddOns.IsAddOnLoaded("MultiBuyer") then
         -- Wait a moment so EllesmereUI has set its accent color before the notice reads the theme.
-        if addon.GetSetting("bulkBuy") and not VendorProfitSettings.keepMultiBuyer then C_Timer.After(3, ShowNotice) end
+        if addon.GetSetting("bulkBuy") and not EasyCraftingSettings.keepMultiBuyer then C_Timer.After(3, ShowNotice) end
     elseif not hooked and type(MerchantItemButton_OnModifiedClick) == "function" then
         hooked = true
         hooksecurefunc(_G, "MerchantItemButton_OnModifiedClick", OnModifiedClick)

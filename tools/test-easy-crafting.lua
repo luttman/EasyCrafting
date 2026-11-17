@@ -1,7 +1,7 @@
 local scriptDirectory = arg[0]:match("^(.*[/\\])") or ""
-local addonDirectory = scriptDirectory .. "../VendorProfit/"
-local filename = arg[1] or addonDirectory .. "VendorProfit.lua"
-local eventHandler, itemTooltip, currentRecipe, queued, routeHover
+local addonDirectory = scriptDirectory .. "../"
+local filename = arg[1] or addonDirectory .. "EasyCrafting.lua"
+local eventHandler, currentRecipe, queued, routeHover
 local visible = true
 local scanMining, knowTin = false, true
 local auction = { [2841] = 205, [2319] = 82, [2592] = 109, [12037] = 200, [2692] = 50, [9000] = 70 }
@@ -128,13 +128,9 @@ C_TradeSkillUI = {
 }
 C_Timer = { After = function(_, callback) queued = callback end }
 ProfessionsFrame = { IsVisible = function() return visible end }
-TooltipDataProcessor = { AddTooltipPostCall = function(_, callback) itemTooltip = callback end }
-local tooltip = { IsForbidden = function() return false end, AddDoubleLine = function(self, label, text)
-    self.label, self.text = label, text
-end }
 
-assert(loadfile(filename))("VendorProfit")
-eventHandler("ADDON_LOADED", "VendorProfit")
+assert(loadfile(filename))("EasyCrafting")
+eventHandler("ADDON_LOADED", "EasyCrafting")
 currentRecipe = 3953
 Auctionator.CraftingInfo.InitializeProfessionsFrame()
 assert(frame.Total.text == "To Craft: cost\nProfit: AH\nProfit to vendor: [red]-1c\nOther cost: here")
@@ -150,20 +146,14 @@ assert(select(2, frame.Total.text:gsub("Profit to vendor", "")) == 1)
 eventHandler("TRADE_SKILL_SHOW")
 assert(queued)
 queued()
-assert(VendorProfitRecipes[3953] and VendorProfitRecipes[10002] and not VendorProfitRecipes[10003])
-itemTooltip(tooltip, { id = 4382 })
-assert(tooltip.label == "Profit to vendor (each)" and tooltip.text == "[red]-1c")
+assert(EasyCraftingRecipes[3953] and EasyCraftingRecipes[10002] and not EasyCraftingRecipes[10003])
 currentRecipe = 10002
 frame:UpdateTotal()
 assert(frame.Total.text:find("Profit to vendor (min. yield): [green]364c", 1, true))
-itemTooltip(tooltip, { id = 12209 })
-assert(tooltip.label == "Profit to vendor (each, min. yield)" and tooltip.text == "[green]182c")
 
 auction[12037] = nil
 frame:UpdateTotal()
 assert(frame.Total.text:find("Missing reagent price", 1, true))
-itemTooltip(tooltip, { id = 12209 })
-assert(tooltip.text == "Missing reagent price")
 auction[12037] = 200
 sales[12209] = nil
 frame:UpdateTotal()
@@ -175,19 +165,13 @@ assert(frame.Total.text:find("364c", 1, true))
 currentRecipe = 10003
 frame:UpdateTotal()
 assert(frame.Total.text:find("[green]230c", 1, true))
-tooltip.text = nil
-itemTooltip(tooltip, { id = 9999 })
-assert(tooltip.text == nil)
-tooltip.IsForbidden = function() return true end
-itemTooltip(tooltip, { id = 4382 })
-assert(tooltip.text == nil)
 
 -- Load Mining as a separate profession, and compare buying bars, mixed inputs, and smelting all the way from ore.
 scanMining, knowTin, currentRecipe = true, false, 3953
 auction[2840], auction[3576], auction[2770], auction[2771] = 187, 109, 174, 99
 eventHandler("TRADE_SKILL_SHOW")
 queued()
-assert(VendorProfitRecipes[2659] and VendorProfitRecipes[2657] and not VendorProfitRecipes[3304])
+assert(EasyCraftingRecipes[2659] and EasyCraftingRecipes[2657] and not EasyCraftingRecipes[3304])
 assert(frame.Total.text:find("[green]126c", 1, true))
 routeHover:OnEnter()
 assert(GameTooltip.lines[2] == "Smelt Bronze x 1 (makes 2 x Bronze Bar) | 283c")
@@ -202,9 +186,6 @@ queued()
 assert(frame.Total.text:find("[green]136c", 1, true))
 assert(GameTooltip.lines[5] == "  Smelt Tin x 1 (makes 1 x Tin Bar) | 99c")
 assert(GameTooltip.lines[6] == "    Buy 1 x Tin Ore (AH) | 99c")
-tooltip.IsForbidden = function() return false end
-itemTooltip(tooltip, { id = 4382 })
-assert(tooltip.text == "[green]136c")
 
 currentRecipe = 10004
 frame:UpdateTotal()
@@ -224,15 +205,12 @@ currentRecipe = nil
 frame:UpdateTotal()
 assert(not routeHover.visible and not GameTooltip.visible)
 
--- A second addon load with the saved recipe table populated restores tooltips before opening a profession.
+-- A second addon load with the saved recipe table populated loads before opening a profession.
 visible = false
-tooltip.IsForbidden = function() return false end
 local addon = {}
-assert(loadfile(filename))("VendorProfit", addon)
-eventHandler("ADDON_LOADED", "VendorProfit")
-itemTooltip(tooltip, { id = 4382 })
-assert(tooltip.text == "[green]136c")
-print("Vendor Profit: hover placement, learned recipes, nested smelting, mixed routes, cycle fallback, yields, allocations, and saved cache passed")
+assert(loadfile(filename))("EasyCrafting", addon)
+eventHandler("ADDON_LOADED", "EasyCrafting")
+print("Easy Crafting: hover placement, learned recipes, nested smelting, mixed routes, cycle fallback, yields, allocations, and saved cache passed")
 
 local have = { [2841] = 1 }
 local function Count(id) return have[id] or 0 end
@@ -416,6 +394,7 @@ C_Item.GetItemIconByID = function() return 134400 end
 C_Spell = {
     GetSpellDescription = function() return "Craft the selected recipe." end,
     GetSpellName = function(id) return id == 3953 and "Bronze Framework" or nil end,
+    GetSpellInfo = function(id) return { castTime = 2000 } end,
     GetSpellTexture = function() return 134400 end,
 }
 UnitGUID = function() return "Player-test" end
@@ -439,12 +418,12 @@ crafting:SelectRecipe(C_TradeSkillUI.GetRecipeInfo(3953))
 local blizzardFrame = ProfessionsFrame
 ProfessionsFrame = nil
 for _, file in ipairs({ "Settings", "ProfessionData", "Planning", "ProfessionTools", "ProfessionWindow" }) do
-    assert(loadfile(addonDirectory .. file .. ".lua"))("VendorProfit", addon)
-    if file == "Settings" then widgets[#widgets]:OnEvent("ADDON_LOADED", "VendorProfit") end
+    assert(loadfile(addonDirectory .. file .. ".lua"))("EasyCrafting", addon)
+    if file == "Settings" then widgets[#widgets]:OnEvent("ADDON_LOADED", "EasyCrafting") end
 end
 local windowEvents = widgets[#widgets]
-windowEvents:OnEvent("ADDON_LOADED", "VendorProfit")
-VendorProfitSettings.ranks = true
+windowEvents:OnEvent("ADDON_LOADED", "EasyCrafting")
+EasyCraftingSettings.ranks = true
 ProfessionsFrame = blizzardFrame
 ProfessionsFrame:Hide()
 crafting:Hide()
@@ -464,7 +443,7 @@ loadingProfession = false
 queued()
 assert(FindText("Engineering 150/155") and FindText("Profit to vendor") and FindText("+136c"))
 local overlay = FindText("Engineering 150/155").parent.parent
-assert(overlay.name == "VendorProfitProfessionWindow" and overlay.parent == UIParent)
+assert(overlay.name == "EasyCraftingProfessionWindow" and overlay.parent == UIParent)
 assert(ProfessionsFrame:GetAlpha() == 0 and overview.ignoresAlpha and select(2, overview:GetPoint()) == overlay)
 assert(not ProfessionsFrame:IsMouseClickEnabled() and not ProfessionsFrame:IsMouseMotionEnabled())
 assert(not crafting:IsMouseWheelEnabled() and not nativeRegion:IsMouseMotionEnabled())
@@ -516,7 +495,7 @@ ChatFrame_OpenChat = function(text) chat = text end
 FindButton("Link"):Click()
 assert(chat == "[Engineering]")
 FindButton("Settings"):Click()
-local title = FindText("Vendor Profit settings")
+local title = FindText("Easy Crafting settings")
 assert(title and title.parent:IsShown() and title.parent.raised)
 assert(overlay.strata == "MEDIUM" and overlay.toplevel and overlay.raised)
 assert(title.parent.strata == "FULLSCREEN_DIALOG")
@@ -643,7 +622,7 @@ addon.AddToShopping(3953, 1, schematics[3953])
 assert(addon.GetWork().shopping[3953].quantity == 3)
 local savedNeeds, prerequisites = addon.ShoppingPlan(Count)
 assert(savedNeeds[2319] == 3 and savedNeeds[2592] == 3 and prerequisites[1].recipeID == 2657)
-assert(FindText("Use Vendor Profit's profession window") and FindText("Vendor profit in item tooltips"))
+assert(FindText("Use Easy Crafting's profession window"))
 assert(not FindText("Recipe sources") and not FindText("Gathering tracking reminder"))
 addon.RefreshWindow()
 queued()
@@ -752,7 +731,7 @@ addon.GetWork().shopping[15863] = nil
 AuctionHouseFrame:Show()
 addon.RefreshWindow()
 queued()
-SlashCmdList.VENDORPROFITWINDOW()
+SlashCmdList.EASYCRAFTINGWINDOW()
 queued()
 assert(not overlay:IsShown() and ProfessionsFrame:GetAlpha() == 1)
 ProfessionsFrame:OnShow()
@@ -761,7 +740,7 @@ assert(not overview.ignoresAlpha and select(2, overview:GetPoint()) == Professio
 assert(ProfessionsFrame:IsMouseClickEnabled() and ProfessionsFrame:IsMouseMotionEnabled())
 assert(crafting:IsMouseWheelEnabled() and nativeRegion:IsMouseMotionEnabled() and not nativeRegion:IsMouseClickEnabled())
 assert(lateControl:IsMouseClickEnabled() and not lateControl:IsMouseMotionEnabled())
-SlashCmdList.VENDORPROFITWINDOW()
+SlashCmdList.EASYCRAFTINGWINDOW()
 queued()
 assert(overlay:IsShown())
 HideUIPanel = function(frame)
@@ -812,7 +791,7 @@ local bought = {}
 BuyMerchantItem = function(_, quantity) bought[#bought + 1] = quantity end
 MerchantFrame.selectedTab = 1
 MerchantFrame:Show()
-assert(loadfile(addonDirectory .. "BulkBuy.lua"))("VendorProfit", addon)
+assert(loadfile(addonDirectory .. "BulkBuy.lua"))("EasyCrafting", addon)
 local bulkEvents = widgets[#widgets]
 bulkEvents:OnEvent("PLAYER_LOGIN")
 MerchantItemButton_OnModifiedClick({ GetID = function() return 1 end }, "LeftButton")
@@ -847,7 +826,7 @@ queued()
 local notice = FindText("Multi Buyer is also installed").parent
 assert(notice:IsShown())
 FindButton("Keep both"):Click()
-assert(not notice:IsShown() and VendorProfitSettings.keepMultiBuyer)
+assert(not notice:IsShown() and EasyCraftingSettings.keepMultiBuyer)
 if EllesmereUI then
     -- A new EllesmereUI accent repaints what is already on screen.
     EllesmereUI.accentChanged(1, 0, 0.5)
@@ -857,4 +836,4 @@ if EllesmereUI then
     end
     assert(thumb[1] == 1 and thumb[2] == 0 and thumb[3] == 0.5)
 end
-print("Vendor Profit: opening visibility, native fallback, header buttons, mouse input, crafting, shopping, price search, and bulk buying passed")
+print("Easy Crafting: opening visibility, native fallback, header buttons, mouse input, crafting, shopping, price search, and bulk buying passed")

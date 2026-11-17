@@ -1,0 +1,7 @@
+package-as: EasyCrafting
+
+ignore:
+  - tools
+  - releases
+  - README.md
+  - .github

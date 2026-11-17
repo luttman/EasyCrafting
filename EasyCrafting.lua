@@ -406,45 +406,21 @@ local function AttachToAuctionator()
     routeHover:SetScript("OnLeave", HideRoute)
     routeHover:SetScript("OnHide", HideRoute)
     hooksecurefunc(frame, "UpdateTotal", AddVendorProfit)
-    if frame:IsVisible() then frame:UpdateTotal() end
+    -- Auctionator errors here when no recipe is selected yet; the next real update refreshes it.
+    if frame:IsVisible() then pcall(frame.UpdateTotal, frame) end
 end
 
-local function AddItemTooltip(tooltip, data)
-    if tooltip:IsForbidden() then return end
-    if addon.GetSetting and not addon.GetSetting("itemTooltip") then return end
-    local itemID = data and data.id
-    if issecretvalue and issecretvalue(itemID) then return end
-    local sources = itemID and recipesByItem[itemID]
-    if not sources then return end
-
-    local salePrice = select(11, C_Item.GetItemInfo(itemID))
-    if not salePrice or salePrice <= 0 then return end
-    local bestCost, variableYield
-    for _, recipe in ipairs(sources) do
-        local quote = QuoteReagents(recipe.slots, 1, { [itemID] = true })
-        if quote then
-            local unitCost = quote.cost / recipe.yield
-            if not bestCost or unitCost < bestCost then
-                bestCost, variableYield = unitCost, recipe.variableYield
-            end
-        end
-    end
-    local label = variableYield and "Profit to vendor (each, min. yield)" or "Profit to vendor (each)"
-    local value = bestCost and FormatProfit(salePrice - bestCost) or "Missing reagent price"
-    tooltip:AddDoubleLine(label, value, 1, 0.82, 0, 1, 1, 1)
-end
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("ADDON_LOADED")
 events:SetScript("OnEvent", function(self, event, id, success)
     if event == "ADDON_LOADED" and id == addonName then
-        VendorProfitRecipes = VendorProfitRecipes or {}
-        recipes = VendorProfitRecipes
+        EasyCraftingRecipes = EasyCraftingRecipes or {}
+        recipes = EasyCraftingRecipes
         RebuildItemIndex()
 
         hooksecurefunc(Auctionator.CraftingInfo, "InitializeProfessionsFrame", AttachToAuctionator)
         AttachToAuctionator()
-        TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, AddItemTooltip)
 
         self:UnregisterEvent("ADDON_LOADED")
         self:RegisterEvent("TRADE_SKILL_SHOW")

@@ -1,14 +1,13 @@
 local _, addon = ...
 
 local options = {
-    { "window", "Use Vendor Profit's profession window", true },
+    { "window", "Use Easy Crafting's profession window", true },
     { "blizzardStyle", "Blizzard window style (type /reload to apply)", false },
     { "unlearned", "Show unlearned recipes", true },
     { "craftCounts", "Show craftable and merchant counts in the recipe list", true },
     { "altProfessions", "Remember your alts' professions", true },
-    { "vendorProfit", "Vendor profit in the recipe list", true },
+    { "vendorProfit", "Vendor profit in the recipe list", false },
     { "auctionProfit", "Auction House profit", true },
-    { "itemTooltip", "Vendor profit in item tooltips", true },
     { "bulkBuy", "Shift-click merchant items to buy in bulk", true },
 }
 
@@ -16,14 +15,14 @@ local defaults, toggles = {}, {}
 for _, row in ipairs(options) do defaults[row[1]] = row[3] end
 
 function addon.GetSetting(key)
-    local value = VendorProfitSettings and VendorProfitSettings[key]
+    local value = EasyCraftingSettings and EasyCraftingSettings[key]
     if value == nil then return defaults[key] end
     return value
 end
 
 function addon.SetSetting(key, value)
-    VendorProfitSettings = VendorProfitSettings or {}
-    VendorProfitSettings[key] = value
+    EasyCraftingSettings = EasyCraftingSettings or {}
+    EasyCraftingSettings[key] = value
     if toggles[key] then toggles[key]:SetChecked(value) end
     addon.RefreshWindow()
 end
@@ -32,7 +31,7 @@ local settings
 function addon.OpenSettings()
     if not settings then
         local skin = addon.Skin
-        settings = skin.Window("VendorProfitOptions", 430, 65 + #options * 25, "Vendor Profit settings")
+        settings = skin.Window("EasyCraftingOptions", 430, 65 + #options * 25, "Easy Crafting settings")
         for index, row in ipairs(options) do
             local key, label = row[1], row[2]
             local check = CreateFrame("CheckButton", nil, settings, "UICheckButtonTemplate")
@@ -54,14 +53,14 @@ end
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("ADDON_LOADED")
 loader:SetScript("OnEvent", function(self, _, name)
-    if name ~= "VendorProfit" then return end
-    VendorProfitSettings = VendorProfitSettings or {}
-    if VendorProfitSettings.window == nil and VendorProfitSettings.native ~= nil then
-        VendorProfitSettings.window = not VendorProfitSettings.native
+    if name ~= "EasyCrafting" then return end
+    EasyCraftingSettings = EasyCraftingSettings or {}
+    if EasyCraftingSettings.window == nil and EasyCraftingSettings.native ~= nil then
+        EasyCraftingSettings.window = not EasyCraftingSettings.native
     end
-    VendorProfitSettings.native = nil
+    EasyCraftingSettings.native = nil
     self:UnregisterEvent("ADDON_LOADED")
 end)
 
-SLASH_VENDORPROFITSETTINGS1 = "/vpsettings"
-SlashCmdList.VENDORPROFITSETTINGS = addon.OpenSettings
+SLASH_EASYCRAFTINGSETTINGS1 = "/ecsettings"
+SlashCmdList.EASYCRAFTINGSETTINGS = addon.OpenSettings

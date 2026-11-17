@@ -1,7 +1,7 @@
 -- Numeric game facts extracted from the installed SkillUp Forever 1.9.0 data.
 -- Profession thresholds and item/reagent facts: WoW Forever 1.60.1.70888 DB2, https://wago.tools/db2/SkillLineAbility/csv?build=1.60.1.70888
 -- Trainer observations and Classic references: https://github.com/cjber/skillup-forever and https://github.com/cmangos/classic-db
--- Format and implementation are specific to Vendor Profit.
+-- Format and implementation are specific to Easy Crafting.
 local _, addon = ...
 addon.RecipeData = {
     [818]={line=185,first=1,yellow=25,gray=75,item=0,yield=0,sale=0,reagents={4470,1,}},

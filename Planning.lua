@@ -117,11 +117,11 @@ function addon.BreakEvenPrices(amounts, owned, revenue)
 end
 
 function addon.GetWork()
-    VendorProfitWork = VendorProfitWork or {}
-    VendorProfitWork.shopping = VendorProfitWork.shopping or {}
-    VendorProfitWork.owned = VendorProfitWork.owned or {}
-    VendorProfitWork.crafted = VendorProfitWork.crafted or {}
-    return VendorProfitWork
+    EasyCraftingWork = EasyCraftingWork or {}
+    EasyCraftingWork.shopping = EasyCraftingWork.shopping or {}
+    EasyCraftingWork.owned = EasyCraftingWork.owned or {}
+    EasyCraftingWork.crafted = EasyCraftingWork.crafted or {}
+    return EasyCraftingWork
 end
 
 function addon.AddToShopping(id, quantity, schematic)

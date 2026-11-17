@@ -90,8 +90,8 @@ end
 function addon.RememberProfession(line, name, skill, cap, records)
     local guid = UnitGUID("player")
     if not guid or not line then return end
-    VendorProfitSettings.alts = VendorProfitSettings.alts or {}
-    local alts = VendorProfitSettings.alts
+    EasyCraftingSettings.alts = EasyCraftingSettings.alts or {}
+    local alts = EasyCraftingSettings.alts
     local character = alts[guid] or { name = UnitName("player"), realm = GetRealmName(), professions = {} }
     alts[guid] = character
     local learned = {}
@@ -131,7 +131,7 @@ function addon.ToolText(key)
     if reagent then return ReagentUses(tonumber(reagent)) end
     local guid, line = (key or ""):match("^alt:([^:]+):(%d+)$")
     if guid then
-        local alt = VendorProfitSettings.alts[guid]
+        local alt = EasyCraftingSettings.alts[guid]
         local profession = alt and alt.professions[tonumber(line)]
         if not profession then return "" end
         local names = {}
@@ -157,7 +157,7 @@ function addon.ToolEntries(schematic)
     end
     if addon.GetSetting("altProfessions") then
         local mine = UnitGUID("player")
-        for guid, alt in pairs(VendorProfitSettings.alts or {}) do
+        for guid, alt in pairs(EasyCraftingSettings.alts or {}) do
             if guid ~= mine then
                 for id, profession in pairs(alt.professions) do
                     entries[#entries + 1] = { "alt:" .. guid .. ":" .. id, alt.name .. " · " .. profession.name }

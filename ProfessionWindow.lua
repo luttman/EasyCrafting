@@ -709,6 +709,27 @@ local function ShoppingLines(info, schematic)
     return intro, lines
 end
 
+-- The time the whole queue takes: each craft casts for the recipe's cast time.
+local function QueueSeconds(prerequisites, jobs)
+    local seconds = 0
+    local function Add(id, crafts)
+        local info = C_Spell.GetSpellInfo(id)
+        seconds = seconds + crafts * ((info and info.castTime or 0) / 1000)
+    end
+    for _, step in ipairs(prerequisites) do Add(step.recipeID, step.batches) end
+    for _, job in ipairs(jobs) do Add(job.id, job.quantity) end
+    return seconds
+end
+
+local function FormatDuration(seconds)
+    seconds = math.ceil(seconds)
+    local hours, minutes = math.floor(seconds / 3600), math.floor(seconds % 3600 / 60)
+    seconds = seconds % 60
+    if hours > 0 then return ("%d h %d min"):format(hours, minutes) end
+    if minutes > 0 then return ("%d min %d s"):format(minutes, seconds) end
+    return ("%d s"):format(seconds)
+end
+
 local function QueueLines()
     local lines = {}
     local needs, prerequisites, jobs = addon.ShoppingPlan(BagCount)
@@ -720,6 +741,8 @@ local function QueueLines()
         AddCrafts(lines, prerequisites, "Reagent")
         AddJobs(lines, jobs, true)
         if next(needs) then notes[1] = "Open the shopping list to see missing materials." end
+        local seconds = QueueSeconds(prerequisites, jobs)
+        if seconds > 0 then notes[#notes + 1] = "Estimated time: " .. FormatDuration(seconds) end
     end
     if craftingJob then
         notes[#notes + 1] = ("Crafting %d of %d complete"):format(craftingJob.done, craftingJob.count)
@@ -1110,7 +1133,7 @@ end
 local function LinkProfession()
     local link = C_TradeSkillUI.GetTradeSkillListLink()
     if not link then
-        print("Vendor Profit: this profession has no chat link.")
+        print("Easy Crafting: this profession has no chat link.")
         return
     end
     if not ChatEdit_InsertLink(link) then ChatFrame_OpenChat(link) end
@@ -1140,13 +1163,13 @@ local function BuyMaterials()
     local all = IsShiftKeyDown()
     local offers = addon.MerchantOffers(window.needs or {}, all)
     if #offers == 0 then
-        print("Vendor Profit: this merchant has none of the materials on your list.")
+        print("Easy Crafting: this merchant has none of the materials on your list.")
         return
     end
     -- The dialog lists every purchase and the total, so the player sees what Buy does.
     local dialog = window.buyDialog
     if not dialog then
-        dialog = Window("VendorProfitBuyConfirm", 340, 120, "Buy from this merchant")
+        dialog = Window("EasyCraftingBuyConfirm", 340, 120, "Buy from this merchant")
         window.buyDialog = dialog
         dialog.list = Label(dialog, "GameFontHighlight", colors.text)
         dialog.list:SetPoint("TOPLEFT", 14, -44)
@@ -1166,9 +1189,9 @@ local function BuyMaterials()
                     and offer.total == expected.total and offer.quantity == expected.quantity
             end
             if not same then
-                print("Vendor Profit: the merchant's offers changed. Review the purchases again.")
+                print("Easy Crafting: the merchant's offers changed. Review the purchases again.")
             elseif GetMoney() < approved.total then
-                print("Vendor Profit: you don't have enough money for these materials.")
+                print("Easy Crafting: you don't have enough money for these materials.")
             else
                 for _, offer in ipairs(current) do
                     addon.BuyPaced(offer.index, offer.id, offer.quantity, offer.perCall)
@@ -1206,12 +1229,12 @@ local function SellCrafts()
     end
     local stacks, counts, values, total = Totals()
     if #stacks == 0 then
-        print("Vendor Profit: none of your crafted items are in your bags.")
+        print("Easy Crafting: none of your crafted items are in your bags.")
         return
     end
     local dialog = window.sellDialog
     if not dialog then
-        dialog = Window("VendorProfitSellConfirm", 340, 120, "Sell to this merchant")
+        dialog = Window("EasyCraftingSellConfirm", 340, 120, "Sell to this merchant")
         window.sellDialog = dialog
         dialog.list = Label(dialog, "GameFontHighlight", colors.text)
         dialog.list:SetPoint("TOPLEFT", 14, -44)
@@ -1224,7 +1247,7 @@ local function SellCrafts()
             -- Sell only if the bags still hold what the dialog listed.
             local current, _, _, value = Totals()
             if value ~= dialog.total then
-                print("Vendor Profit: your bags changed. Open Sell crafts again.")
+                print("Easy Crafting: your bags changed. Open Sell crafts again.")
                 return
             end
             local crafted = addon.GetWork().crafted
@@ -1266,23 +1289,23 @@ local function CraftNext()
         if C_TradeSkillUI.OpenTradeSkill then
             stayInQueue = true
             C_TradeSkillUI.OpenTradeSkill(data.line)
-            print("Vendor Profit: opening the profession for " .. SpellName(nextJob.id) .. ". Click Craft next again.")
+            print("Easy Crafting: opening the profession for " .. SpellName(nextJob.id) .. ". Click Craft next again.")
         else
-            print("Vendor Profit: open the profession for " .. SpellName(nextJob.id) .. ".")
+            print("Easy Crafting: open the profession for " .. SpellName(nextJob.id) .. ".")
         end
         return
     end
     local info = C_TradeSkillUI.GetRecipeInfo(nextJob.id)
     if not info or not info.learned or (not data and C_TradeSkillUI.IsRecipeInSkillLine
         and not C_TradeSkillUI.IsRecipeInSkillLine(nextJob.id, professionID)) then
-        print("Vendor Profit: open the profession for " .. SpellName(nextJob.id) .. ".")
+        print("Easy Crafting: open the profession for " .. SpellName(nextJob.id) .. ".")
         return
     end
     window.preview = nil
     page:SelectRecipe(info)
     local count = math.min(nextJob.quantity, page:GetCraftableCount())
     if count <= 0 or not page.CreateButton:IsEnabled() then
-        print("Vendor Profit: check the recipe's materials and crafting requirements.")
+        print("Easy Crafting: check the recipe's materials and crafting requirements.")
         return
     end
     craftingJob = { id = nextJob.id, count = count, done = 0 }
@@ -1606,7 +1629,16 @@ local function BuildDetail()
     window.searchRecipe = Button(detail, "Search on AH", 100, function()
         local info, schematic = SelectedRecipe()
         schematic = schematic or (info and GetSchematic(info))
-        addon.SearchMaterials(addon.DirectReagents(schematic, Quantity()))
+        -- Search what the cheapest route buys on the AH for the full quantity, ignoring bag stock,
+        -- so you can buy more than you hold.
+        local needs = addon.PlanShopping(addon.DirectReagents(schematic, Quantity()), function() return 0 end)
+        local buy = {}
+        for id, count in pairs(needs) do
+            local _, source = addon.PurchasePrice(id)
+            if source ~= "merchant" then buy[id] = count end
+        end
+        -- Nothing to buy (all owned, or all from merchants): still search the direct reagents.
+        addon.SearchMaterials(next(buy) and buy or addon.DirectReagents(schematic, Quantity()))
     end)
     window.searchRecipe:SetPoint("RIGHT", window.addShopping, "LEFT", -6, 0)
 end
@@ -1626,7 +1658,7 @@ local function BuildWindow()
     ApplySkin()
     -- Blizzard's frame has its own title bar, so the content starts below it.
     local top = blizzard and 22 or 0
-    window = CreateFrame("Frame", "VendorProfitProfessionWindow", UIParent, blizzard and "BasicFrameTemplateWithInset" or nil)
+    window = CreateFrame("Frame", "EasyCraftingProfessionWindow", UIParent, blizzard and "BasicFrameTemplateWithInset" or nil)
     window.top = top
     window:Hide()
     window:SetSize(828, 620)
@@ -1637,7 +1669,7 @@ local function BuildWindow()
     window:SetMovable(true)
     window:SetClampedToScreen(true)
     window:SetClampRectInsets(0, -34, 0, 0)
-    local position = VendorProfitSettings.position
+    local position = EasyCraftingSettings.position
     if position then
         window:SetPoint(position.point, UIParent, position.relative, position.x, position.y)
     else
@@ -1679,7 +1711,7 @@ local function BuildWindow()
     drag:SetScript("OnDragStop", function()
         window:StopMovingOrSizing()
         local point, _, relative, x, y = window:GetPoint()
-        VendorProfitSettings.position = { point = point, relative = relative, x = x, y = y }
+        EasyCraftingSettings.position = { point = point, relative = relative, x = x, y = y }
     end)
 
     -- The three views are tabs, so the current one is always visible. They sit above the drag area.
@@ -1831,7 +1863,7 @@ events:SetScript("OnEvent", function(self, event, arg1, _, spellID)
     if event == "ADDON_LOADED" then
         if arg1 == "Blizzard_Professions" then OnNativeShow(); return end
         if arg1 ~= addonName then return end
-        VendorProfitSettings = VendorProfitSettings or {}
+        EasyCraftingSettings = EasyCraftingSettings or {}
         for _, name in ipairs({
             "TRADE_SKILL_SHOW", "TRADE_SKILL_CLOSE", "TRADE_SKILL_LIST_UPDATE",
             "TRADE_SKILL_DATA_SOURCE_CHANGED", "NEW_RECIPE_LEARNED", "TRADE_SKILL_FAVORITES_CHANGED",
@@ -1891,8 +1923,8 @@ events:SetScript("OnEvent", function(self, event, arg1, _, spellID)
     end
 end)
 
-SLASH_VENDORPROFITWINDOW1 = "/vendorprofit"
-SlashCmdList.VENDORPROFITWINDOW = function()
+SLASH_EASYCRAFTINGWINDOW1 = "/easycrafting"
+SlashCmdList.EASYCRAFTINGWINDOW = function()
     addon.SetSetting("window", not GetSetting("window"))
-    print(GetSetting("window") and "Vendor Profit: custom profession window." or "Vendor Profit: standard profession window.")
+    print(GetSetting("window") and "Easy Crafting: custom profession window." or "Easy Crafting: standard profession window.")
 end
