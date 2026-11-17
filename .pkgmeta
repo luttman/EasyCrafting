@@ -5,3 +5,4 @@ ignore:
   - releases
   - README.md
   - .github
+  - assets
