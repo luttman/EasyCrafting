@@ -5,6 +5,7 @@ local records, entries, rows = {}, {}, {}
 local collapsed = {}
 local mode, filter, offset = "recipes", "all", 0
 local professionID, stayInQueue
+local enchantTarget, enchantRecipe -- item GUID picked for the selected enchant; Enchanting casts need an item
 local Refresh, DrawRows, DrawDetail
 local savedAlpha, dockedTab, openingUntil
 local nativeMouse = {}
@@ -1029,12 +1030,18 @@ DrawDetail = function()
     local count = Quantity()
     local learned = info ~= nil and info.learned == true and not linked
     local craftable = learned and page:GetCraftableCount() or 0
+    local enchant = not special and learned and info.isEnchantingRecipe == true
+    if enchantRecipe ~= (info and info.recipeID) or not enchant
+        or (enchantTarget and not C_TradeSkillUI.IsEnchantTargetValid(info.recipeID, enchantTarget)) then
+        enchantTarget = nil
+    end
+    enchantRecipe = info and info.recipeID
     local showBar = DrawSkillBar(not special and info or nil)
     window.rightScroll:SetPoint("TOPLEFT", 12, showBar and -115 or -65)
     if special then
         window.rightScroll:SetPoint("BOTTOMRIGHT", -32, 42)
     else
-        window.rightScroll:SetPoint("BOTTOMRIGHT", window.addShopping, "TOPRIGHT", -20, 10)
+        window.rightScroll:SetPoint("BOTTOMRIGHT", window.addShopping, "TOPRIGHT", -20, enchant and 22 or 10)
     end
 
     window.recipeName:SetText(shopping and "Shopping list"
@@ -1054,6 +1061,17 @@ DrawDetail = function()
     window.create:SetEnabled(learned and page.CreateButton:IsEnabled() and count <= craftable)
     window.createAll:SetEnabled(learned and page.CreateAllButton:IsEnabled() and craftable > 0)
     window.createAll.label:SetText(("Create all (%d)"):format(craftable))
+    window.enchantSlot:SetShown(enchant)
+    window.create.label:SetText(enchant and "Enchant" or "Create")
+    if enchant then
+        local item = enchantTarget and Item:CreateFromItemGUID(enchantTarget)
+        local slot = window.enchantSlot
+        slot.icon:SetTexture(item and item:GetItemIcon() or 134400)
+        slot.label:SetText(item and ("1/1 " .. (item:GetItemLink() or item:GetItemName() or ""))
+            or "Optional target: click to choose an item")
+        window.create:SetEnabled(craftable > 0)
+        window.createAll:Hide()
+    end
     window.quantity:SetShown(not (queue or tools))
     window.lessQuantity:SetShown(not (queue or tools))
     window.moreQuantity:SetShown(not (queue or tools))
@@ -1114,11 +1132,47 @@ DrawDetail = function()
     TextColor(window.auctionValue, ahColor)
 end
 
+local function OpenEnchantTargets(button, mouse)
+    local info = SelectedRecipe()
+    if not info then return end
+    if mouse == "RightButton" then
+        enchantTarget = nil
+        return QueueRefresh()
+    end
+    MenuUtil.CreateContextMenu(button, function(_, menu)
+        local guids = C_TradeSkillUI.GetEnchantItems(info.recipeID)
+        if #guids == 0 then menu:CreateTitle("None of your items take this enchant.") end
+        for _, guid in ipairs(guids) do
+            local item = Item:CreateFromItemGUID(guid)
+            menu:CreateButton(item:GetItemLink() or item:GetItemName() or "Item", function()
+                enchantTarget = guid
+                QueueRefresh()
+            end)
+        end
+    end)
+end
+
 local function Craft(all)
     if linked or craftingJob or InCombatLockdown() or not Active(linked) then return end
     local info = SelectedRecipe()
     if not info or not info.learned then return end
     local craftable = page:GetCraftableCount()
+    if info.isEnchantingRecipe then
+        -- An enchant goes on one item. With a chosen item it casts at once and the choice stays for the
+        -- next cast; without one the game opens its targeting cursor.
+        if all or craftable < 1 then return end
+        local ok, err
+        if enchantTarget and C_TradeSkillUI.IsEnchantTargetValid(info.recipeID, enchantTarget) then
+            craftingJob = { id = info.recipeID, count = 1, done = 0 }
+            ok, err = pcall(C_TradeSkillUI.CraftEnchant, info.recipeID, 1, nil, C_Item.GetItemLocation(enchantTarget))
+            if not ok then craftingJob = nil end
+        else
+            ok, err = pcall(C_TradeSkillUI.CraftRecipe, info.recipeID, 1)
+        end
+        if not ok then print("Easy Crafting: could not enchant: " .. tostring(err)) end
+        QueueRefresh()
+        return
+    end
     if all and craftable > 0 and page.CreateAllButton:IsEnabled() then
         craftingJob = { id = info.recipeID, count = craftable, done = 0 }
         page:CreateAll()
@@ -1586,6 +1640,26 @@ local function BuildDetail()
         SetMode("shopping")
     end)
     window.addShopping:SetPoint("BOTTOMRIGHT", totals, "TOPRIGHT", 0, 5)
+    local slot = CreateFrame("Button", nil, detail)
+    window.enchantSlot = slot
+    slot:SetSize(28, 28)
+    slot:SetPoint("BOTTOMLEFT", totals, "TOPLEFT", 0, 5)
+    slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    Surface(slot, "BACKGROUND", colors.border)
+    slot.icon = slot:CreateTexture(nil, "ARTWORK")
+    slot.icon:SetPoint("TOPLEFT", 1, -1)
+    slot.icon:SetPoint("BOTTOMRIGHT", -1, 1)
+    slot.label = Label(slot, "GameFontHighlightSmall", colors.text)
+    slot.label:SetPoint("LEFT", slot, "RIGHT", 8, 0)
+    slot:SetScript("OnClick", OpenEnchantTargets)
+    slot:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Item to enchant")
+        GameTooltip:AddLine("Click to choose the item. Enchant then casts on it, and it stays chosen for the next cast. "
+            .. "Right-click to clear it and use the targeting cursor.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    slot:SetScript("OnLeave", addon.HideRoute)
 
     local qty = CreateFrame("EditBox", nil, detail, "InputBoxTemplate")
     window.quantity = qty
